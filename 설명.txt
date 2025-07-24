@@ -1,0 +1,13 @@
+열 이름	설명	데이터 타입
+open_time	이 캔들(1분봉)이 시작된 시간 (Unix timestamp, ms 단위)	정수 (예: 1717180800000)
+open	캔들이 시작할 때의 가격 (시가)	실수 (예: 0.1612)
+high	해당 1분 동안 가장 높았던 가격 (고가)	실수
+low	해당 1분 동안 가장 낮았던 가격 (저가)	실수
+close	1분이 끝날 때의 가격 (종가)	실수
+volume	이 1분 동안 거래된 도지코인의 개수	실수
+close_time	이 캔들(1분봉)이 종료된 시간 (Unix timestamp, ms 단위)	정수
+quote_volume	이 1분 동안 거래된 금액 (USDT 기준) = volume × 평균 가격	실수
+count	이 1분 동안의 거래 건수 (트랜잭션 수)	정수
+taker_buy_volume	시장가 매수자가 매수한 도지코인 수량	실수
+taker_buy_quote_volume	시장가 매수자가 매수한 금액 (USDT 기준)	실수
+ignore	사용하지 않는 값 (빈칸 또는 0)	문자열 또는 숫자
