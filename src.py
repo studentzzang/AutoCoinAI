@@ -20,22 +20,30 @@ if not _api_key or not _api_secret:
 
 # ------ SETTING LINE -----------------
 
-# 가져올 코인
+    # 가져올 코인
 coin_name = "DOGEUSDT"
 
-# 레버리지 설정(초보자 1이하 추천 x배);
+    # 레버리지 설정(초보자 1이하 추천 x배);
 leverage = 0.8;
 
-# interval 분봉가져옴 1=1min
+    # interval 분봉가져옴 1=1min
 interval = "1"
 
-# 최저가 기준 가져올 n일전 기준의 n
+    # 기준 수익률 % (매도 기준 수익률 1~10 정도)
+revenue_per = 3
+
+    # 최저가 기준 가져올 n일전 기준의 n
 get_lowest_day = 2.5
+
+    # 최저가에 조금 곱해줘서 최저가 기준을 높여 매수가능성 높임 (너무 높이면 수익률 하락, 0~0.1)
+proper_lowest_per = 0.02
 
 # -------- ------ GETTING LINE (다른 함수에서 설정해줌) -------- ---------
 
-# n일 기준 가장 저가
 lowest = 0
+revenue_line = 0
+
+isHavingCoin = False
 
 # ----Get USER INFO ---------------------
 balance_info = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0] # 전체 자산(USD 기준)
@@ -56,7 +64,7 @@ if usdt_balance or usdt_balance==0:
 else:
     print("❌ USDT 잔액 정보를 찾을 수 없습니다. USDT가 입금 되었는지 확인하세요.", usdt_balance)
 
-# -------- GET LOWEST PRICE BY STANDARD --------- ------------
+# -------- FUNCTION LINE --------- ------------
 
 def get_lowest_price():
     
@@ -82,11 +90,22 @@ def get_lowest_price():
     _lowest = min(klines, key=lambda x: float(x[3]))  # x[3] = lowPrice
     lowest_time = datetime.fromtimestamp(int(_lowest[0]) / 1000).astimezone(timezone.utc)
     
-    lowest = _lowest[3]
+    global lowest
+    lowest = float(_lowest[3]) + float(_lowest[3]) * proper_lowest_per
 
-    print(f"📉 최저가: {lowest} USDT at {lowest_time}")
+    print(f"📉 최저가: {lowest:.4f} USDT at {lowest_time}")
+    
+def set_revenue_line():
+    
+    global revenue_line
+    revenue_line = lowest + (lowest * (revenue_per/100))
+    
+    print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line}$ 💡")
 
 def main_loop():
+    
+    prev_price = None
+    
     while True:
         try:
             response = session.get_tickers(
@@ -94,17 +113,62 @@ def main_loop():
                 symbol = coin_name,
                 
             )
-            price = response['result']['list'][0]['lastPrice']
+            
+            price = float(response['result']['list'][0]['lastPrice'])
             date = datetime.now().date()
             hour = datetime.now().hour
             minute = datetime.now().minute
             sec = datetime.now().second
             
-            print(f"[{date} {hour}:{minute}:{sec}] {coin_name} 가격 {price}$")
+            status = "default"
             
-        except:
-            print("# # 에러 # #")
+            # 매수 준비 체크 ---------
+
+            if prev_price is not None and !isHavingCoin and price<=lowest:
+                if price >= prev_price:
+                    status = "매수!"
+                    
+                    buy()
+                elif price < prev_price:
+                    status = "🚨 매수 준비"
+     
+                
+            #매도 준비 체크 --------
+        
+            if prev_price is not None and isHavingCoin and price >= revenue_line:
+                if price <= prev_price:
+                    status = "매도!"
+                    
+                    buy()
+                elif price > prev_price:
+                    status = "🚨 매도 준비"
+
+                    
+            
+            prev_price = price
+            
+            
+            
+            print(f"[{date} {hour}:{minute}:{sec}] {coin_name} 가격 {price}$  |  상태 {status}")
+        
+                
+            
+        except Exception as e:
+            print("# # 에러 # #", e)
         time.sleep(3)
 
+def buy():
+    global isHavingCoin
+    isHavingCoin = True
+    
+    
+
+def sell():
+    global isHavingCoin
+    isHavingCoin = False
+    
+    
+    
 get_lowest_price()
+set_revenue_line()
 main_loop()
