@@ -29,8 +29,8 @@ leverage = 0.8;
     # interval 분봉가져옴 1=1min
 interval = "1"
 
-    # 기준 수익률 % (매도 기준 수익률 1~10 정도)
-revenue_per = 3
+    # 기준 수익률 % (매도 기준 수익률 1~20 정도)
+revenue_per = 6
 
     # 최저가 기준 가져올 n일전 기준의 n
 get_lowest_day = 2.5
@@ -81,7 +81,7 @@ def get_lowest_price():
         interval = '5', # 기준 분봉
         start = start_time,
         end= end_time,
-        limit=3000,
+        limit=1000,
     )
     
     klines = res['result']['list']
@@ -100,7 +100,7 @@ def set_revenue_line():
     global revenue_line
     revenue_line = lowest + (lowest * (revenue_per/100))
     
-    print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line}$ 💡")
+    print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line:.4}$ 💡")
 
 def main_loop():
     
