@@ -35,8 +35,8 @@ revenue_per = 6
     # 최저가 기준 가져올 n일전 기준의 n
 get_lowest_day = 2.5
 
-    # 최저가에 조금 곱해줘서 최저가 기준을 높여 매수가능성 높임 (너무 높이면 수익률 하락, 0~0.1)
-proper_lowest_per = 0.02
+    # 최저가에 조금 곱해줘서 최저가 기준을 높여 매수가능성 높임 (너무 높이면 수익률 하락, 0~5)
+proper_lowest_per = 2
 
 # -------- ------ GETTING LINE (다른 함수에서 설정해줌) -------- ---------
 
@@ -91,16 +91,16 @@ def get_lowest_price():
     lowest_time = datetime.fromtimestamp(int(_lowest[0]) / 1000).astimezone(timezone.utc)
     
     global lowest
-    lowest = float(_lowest[3]) + float(_lowest[3]) * proper_lowest_per
+    lowest = float(_lowest[3]) + float(_lowest[3]) * (proper_lowest_per/100.0)
 
-    print(f"📉 매수 라인(최저가 * [proper_lowest_per]): {lowest:.4f} USDT at {lowest_time}")
+    print(f"📉 매수 라인(최저가 {proper_lowest_per}%): {lowest:.4f} USDT at {lowest_time}")
     
 def set_revenue_line():
     
     global revenue_line
     revenue_line = lowest + (lowest * (revenue_per/100))    
     
-    print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line:.4}$ 💡")
+    print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line:.4f}$ 💡")
 
 def main_loop():
     
