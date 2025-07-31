@@ -106,7 +106,16 @@ def main_loop():
     
     prev_price = None
     
+    last_lowest_update = time.time()
+    
     while True:
+        
+        # 최저가 갱신 by sec
+        now = time.time()
+        if now - last_lowest_update > 21600:
+            get_lowest_price()
+            set_revenue_line()
+            last_lowest_update = now  #갱신
         try:
             response = session.get_tickers(
                 category="linear",
@@ -124,7 +133,7 @@ def main_loop():
             
             # 매수 준비 체크 ---------
 
-            if prev_price is not None and !isHavingCoin and price<=lowest:
+            if prev_price is not None and not isHavingCoin and price<=lowest:
                 if price >= prev_price:
                     status = "매수!"
                     
@@ -139,7 +148,7 @@ def main_loop():
                 if price <= prev_price:
                     status = "매도!"
                     
-                    buy()
+                    sell()
                 elif price > prev_price:
                     status = "🚨 매도 준비"
 
@@ -156,18 +165,75 @@ def main_loop():
         except Exception as e:
             print("# # 에러 # #", e)
         time.sleep(3)
+      
+# 보유한 코인 리턴  
+def get_position_qty():
+    result = session.get_positions(category="linear", symbol=coin_name)
+    pos = result["result"]["list"][0]
+    return float(pos["size"]) if pos["side"] == "Buy" else 0.0  # 롱 포지션일 때만 매도
 
 def buy():
     global isHavingCoin
     isHavingCoin = True
     
+    buy_price_usdt = usdt_balance * leverage
+
+    order = session.place_order(
+        category="linear",
+        symbol = coin_name,
+        side = "Buy",
+        order_type = "Market",
+        qty = buy_price_usdt,
+        reduce_only = False
+        
+    )
+    
+    if order and order.get("retCode") == 0:
+        data = order["result"]
+        qty = data.get("cumExecQty")  # 체결된 코인 수량
+        value = data.get("cumExecValue")  # 체결된 총 USDT
+
+        # 현재 USDT 잔고 다시 조회
+        balance = session.get_wallet_balance(accountType="UNIFIED")
+        usdt_now = float(balance["result"]["list"][0]["totalAvailableBalance"])
+
+        print(f"✅ 매수 완료: 코인 {qty}개 약 {value} USDT")
+        print(f"📦 남은 USDT 잔량: {usdt_now} USDT")
+
+    else:
+        print(f"❌ 매수 실패: {order['retMsg']}")
     
 
 def sell():
     global isHavingCoin
     isHavingCoin = False
     
+    result = session.get_positions()
+    pos = result["result"]["list"][0]
+
+    if pos["side"] == "Buy":
+        qty = float(pos["size"])
+
+        order = session.place_order(
+            category="linear",
+            symbol=coin_name,
+            side="Sell",
+            order_type="Market",
+            qty=qty,
+            time_in_force="GoodTillCancel",
+            reduce_only=True
+        )
+
+        # 결과 출력만 하고 리턴 안 함
+        if order and order.get("retCode") == 0:
+            data = order["result"]
+            print(f"✅ 전량 매도 완료: {data['qty']}개 @ 약 {data['cumExecValue']} USDT")
+        else:
+            print(f"❌ 매도 실패: {order['retMsg']}")
+    else:
+        print("⛔ 롱 포지션이 없습니다.")
     
+
     
 get_lowest_price()
 set_revenue_line()
