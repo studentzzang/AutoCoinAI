@@ -98,7 +98,7 @@ def get_lowest_price():
 def set_revenue_line():
     
     global revenue_line
-    revenue_line = lowest + (lowest * (revenue_per/100))
+    revenue_line = lowest + (lowest * (revenue_per/100))    
     
     print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line:.4}$ 💡")
 

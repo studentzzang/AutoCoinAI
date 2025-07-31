@@ -11,3 +11,6 @@ count	이 1분 동안의 거래 건수 (트랜잭션 수)	정수
 taker_buy_volume	시장가 매수자가 매수한 도지코인 수량	실수
 taker_buy_quote_volume	시장가 매수자가 매수한 금액 (USDT 기준)	실수
 ignore	사용하지 않는 값 (빈칸 또는 0)	문자열 또는 숫자
+
+새로 빌드하는 명령어
+pyinstaller --onefile --noconsole my_script.py

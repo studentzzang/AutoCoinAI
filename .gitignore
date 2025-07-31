@@ -1,0 +1,16 @@
+*.csv
+*.txt
+.env
+*.env
+datas/
+
+# PyInstaller 빌드 결과 무시
+dist/
+build/
+
+# 실행 로그나 임시파일
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
