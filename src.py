@@ -36,7 +36,7 @@ revenue_per = 6
 get_lowest_day = 2.5
 
     # 최저가에 조금 곱해줘서 최저가 기준을 높여 매수가능성 높임 (너무 높이면 수익률 하락, 0~5)
-proper_lowest_per = 2
+proper_lowest_per = 2.5
 
 # -------- ------ GETTING LINE (다른 함수에서 설정해줌) -------- ---------
 
