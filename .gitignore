@@ -3,6 +3,8 @@
 .env
 *.env
 datas/
+*.txt
+*.spec
 
 # PyInstaller 빌드 결과 무시
 dist/

@@ -93,7 +93,7 @@ def get_lowest_price():
     global lowest
     lowest = float(_lowest[3]) + float(_lowest[3]) * proper_lowest_per
 
-    print(f"📉 최저가: {lowest:.4f} USDT at {lowest_time}")
+    print(f"📉 매수 라인(최저가 * [proper_lowest_per]): {lowest:.4f} USDT at {lowest_time}")
     
 def set_revenue_line():
     
