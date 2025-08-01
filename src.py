@@ -24,7 +24,7 @@ if not _api_key or not _api_secret:
 coin_name = "DOGEUSDT"
 
     # 레버리지 설정(초보자 1이하 추천 x배);
-leverage = 0.8;
+leverage = 0.8
 
     # interval 분봉가져옴 1=1min
 interval = "1"
@@ -40,29 +40,61 @@ proper_lowest_per = 2.5
 
 # -------- ------ GETTING LINE (다른 함수에서 설정해줌) -------- ---------
 
+usdt_balance = 0
 lowest = 0
 revenue_line = 0
 
 isHavingCoin = False
 
 # ----Get USER INFO ---------------------
-balance_info = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0] # 전체 자산(USD 기준)
-total_balance_usd = balance_info["totalAvailableBalance"]
+def get_usdt():
+  balance_info = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0] # 전체 자산(USD 기준)
+  total_balance_usd = balance_info["totalAvailableBalance"]
 
 
-print(f"자산: {total_balance_usd}$ (USD)")
+  print(f"자산: {total_balance_usd}$ (USD)")
 
-# USDT 잔액 확인
-balance_res = session.get_wallet_balance(accountType="UNIFIED")
-coin_list = balance_res["result"]["list"][0]["coin"]
+  # USDT 잔액 확인
+  balance_res = session.get_wallet_balance(accountType="UNIFIED")
+  coin_list = balance_res["result"]["list"][0]["coin"]
 
-# USDT 찾기
-usdt_balance = next((coin for coin in coin_list if coin["coin"] == "USDT"), None)
+  # USDT 찾기
+  global usdt_balance
+  usdt_coin = next((coin for coin in coin_list if coin["coin"] == "USDT"), None)
+  usdt_balance = float(usdt_coin["walletBalance"]) if usdt_coin else 0.0
+  
+  
+  if usdt_balance or usdt_balance==0:
+      print(f"✅ USDT 잔액: {usdt_balance} USDT")
+  else:
+      print("❌ USDT 잔액 정보를 찾을 수 없습니다. USDT가 입금 되었는지 확인하세요.", usdt_balance)
+      
+def get_target_info():
+  # 확인할 코인 지정
+  
+  balance_res = session.get_wallet_balance(accountType="UNIFIED")
+  coin_list = balance_res["result"]["list"][0]["coin"]
 
-if usdt_balance or usdt_balance==0:
-    print(f"✅ USDT 잔액: {usdt_balance['walletBalance']} USDT")
-else:
-    print("❌ USDT 잔액 정보를 찾을 수 없습니다. USDT가 입금 되었는지 확인하세요.", usdt_balance)
+  target_info = next((coin for coin in coin_list if coin["coin"] == coin_name), None)
+
+  if target_info:
+      coin_qty = float(target_info["walletBalance"])
+      margin = float(target_info.get("positionMargin", 0.0))
+      unrealised_pnl = float(target_info.get("unrealisedPnl", 0.0))
+      available = float(target_info.get("availableToWithdraw", 0.0))
+
+      print(f"\n📌 [{coin_name}] 정보")
+      print(f" - 총 보유량: {coin_qty}")
+      print(f" - 증거금(positionMargin): {margin}")
+      print(f" - 미실현 손익(PnL): {unrealised_pnl}")
+      print(f" - 출금 가능 잔액: {available}")
+      print("")
+
+      global isHavingCoin
+      if coin_qty > 0:
+          isHavingCoin = True
+  else:
+      print(f"\n❌ {coin_name} 코인 보유 정보 없음.")
 
 # -------- FUNCTION LINE --------- ------------
 
@@ -135,18 +167,18 @@ def main_loop():
 
             if prev_price is not None and not isHavingCoin and price<=lowest:
                 if price >= prev_price:
-                    status = "매수!"
+                    status = "🔥 매수!"
                     
                     buy()
                 elif price < prev_price:
                     status = "🚨 매수 준비"
-     
+
                 
             #매도 준비 체크 --------
         
             if prev_price is not None and isHavingCoin and price >= revenue_line:
                 if price <= prev_price:
-                    status = "매도!"
+                    status = "✨ 매도!"
                     
                     sell()
                 elif price > prev_price:
@@ -174,39 +206,44 @@ def get_position_qty():
 
 def buy():
     global isHavingCoin
-    isHavingCoin = True
-    
+
+    if usdt_balance <= 0:
+        print("❌ USDT 잔고가 0입니다. 매수 중단.")
+        return
+
     buy_price_usdt = usdt_balance * leverage
+
+    # ✅ 최신 가격으로 환산해서 qty 계산
+    ticker = session.get_tickers(category="linear", symbol=coin_name)
+    price = float(ticker["result"]["list"][0]["lastPrice"])
+
+    qty = buy_price_usdt / price  # DOGE 수량
+
+    # ✅ 최소 수량 체크
+    MIN_QTY = 10  # 예: DOGE 최소 수량 (원하면 실제 API로 조회 가능)
+    if qty < MIN_QTY:
+        print(f"❌ 주문 수량이 너무 적습니다. (계산된 수량: {qty:.6f}, 최소 수량: {MIN_QTY})")
+        return
+
+    isHavingCoin = True
 
     order = session.place_order(
         category="linear",
-        symbol = coin_name,
-        side = "Buy",
-        order_type = "Market",
-        qty = buy_price_usdt,
-        reduce_only = False
-        
+        symbol=coin_name,
+        side="Buy",
+        order_type="Market",
+        qty=round(qty, 2),  # 소수점 자릿수 제한
+        reduce_only=False
     )
-    
+
     if order and order.get("retCode") == 0:
         data = order["result"]
-        qty = data.get("cumExecQty")  # 체결된 코인 수량
-        value = data.get("cumExecValue")  # 체결된 총 USDT
-
-        # 현재 USDT 잔고 다시 조회
-        balance = session.get_wallet_balance(accountType="UNIFIED")
-        usdt_now = float(balance["result"]["list"][0]["totalAvailableBalance"])
-
-        print(f"✅ 매수 완료: 코인 {qty}개 약 {value} USDT")
-        print(f"📦 남은 USDT 잔량: {usdt_now} USDT")
-
+        print(f"✅ 매수 완료: {data['cumExecQty']}개 약 {data['cumExecValue']} USDT")
     else:
-        print(f"❌ 매수 실패: {order['retMsg']}")
+        print(f"❌ 매수 실패: {order.get('retMsg')}")
     
 
 def sell():
-    global isHavingCoin
-    isHavingCoin = False
     
     result = session.get_positions()
     pos = result["result"]["list"][0]
@@ -228,13 +265,17 @@ def sell():
         if order and order.get("retCode") == 0:
             data = order["result"]
             print(f"✅ 전량 매도 완료: {data['qty']}개 @ 약 {data['cumExecValue']} USDT")
+
+            global isHavingCoin
+            isHavingCoin = False
         else:
             print(f"❌ 매도 실패: {order['retMsg']}")
     else:
         print("⛔ 롱 포지션이 없습니다.")
     
 
-    
+get_usdt()
+get_target_info()
 get_lowest_price()
 set_revenue_line()
 main_loop()
