@@ -67,22 +67,19 @@ def get_target_info():
     # 확인할 코인 지정
   
     try:
-        res = session.get_coins_balance(accountType="FUND", coin=coin_name.replace("USDT",""))
-        balance_list = res["result"]["balance"]
+      result = session.get_positions(category="linear", symbol=coin_name)
+      balance = float(result["result"]["list"][0]['size'])
         
-        
-        target = next((item for item in balance_list if item["coin"] == coin_name.repalce("USDT","")), None)
-        balance = float(target["walletBalance"]) if target else 0.0
-        
-        if(balance>0):
-            global isHavingCoin
-            isHavingCoin = True
-            
-        
+      
+      if(balance>0):
+        global isHavingCoin
+        isHavingCoin = True
+      
+      print(f"{coin_name} 보유량 {balance}, isHavingCoinn={isHavingCoin}")
+      
     except Exception as e:
-        print(f"❌ FUND 계정 {coin_name} 잔액 정보를 가져오는 중 오류 발생: {e}")
- 
-        
+      print(f"❌ FUND 계정 {coin_name} 잔액 정보를 가져오는 중 오류 발생: {e}")
+
 
 # -------- FUNCTION LINE --------- ------------
 
@@ -140,13 +137,6 @@ def main_loop():
     
     while True:
         
-        # 최저가 갱신 by sec
-        now = time.time()
-        if now - last_lowest_update > 21600:
-            get_lowest_price()
-            set_revenue_line()
-            last_lowest_update = now  #갱신
-
         response = session.get_tickers(
             category="linear",
             symbol = coin_name,
@@ -212,7 +202,8 @@ def buy():
     ticker = session.get_tickers(category="linear", symbol=coin_name)
     price = float(ticker["result"]["list"][0]["lastPrice"])
 
-    qty = round(buy_price_usdt / price,3)  # DOGE 수량
+    qty = int(buy_price_usdt / price)  # 일단 정수화
+    qty = qty // 10 * 10               
 
     isHavingCoin = True
 
@@ -221,7 +212,7 @@ def buy():
     symbol=coin_name,
     side="Buy",
     order_type="Market",
-    qty=round(qty, 3),
+    qty=str(qty),
     reduce_only=False
     )
 
@@ -234,7 +225,7 @@ def buy():
 
 def sell():
     
-    result = session.get_positions()
+    result = session.get_positions(category="linear", symbol=coin_name)
     pos = result["result"]["list"][0]
 
     if pos["side"] == "Buy":
@@ -320,57 +311,49 @@ isHavingCoin = False
 # ----Get USER INFO ---------------------
 def get_usdt():
     global usdt_balance
-    try:
-        res = session.get_coins_balance(accountType="FUND", coin="USDT")
-        balance_list = res["result"]["balance"]
-        
-        
-        usdt_item = next((item for item in balance_list if item["coin"] == "USDT"), None)
-        usdt_balance = float(usdt_item["walletBalance"]) if usdt_item else 0.0
-        
-        print(f"USDT잔액 : {usdt_balance}")
-    except Exception as e:
-        print(f"❌ FUND 계정 USDT 잔액 정보를 가져오는 중 오류 발생: {e}")
-        usdt_balance = 0.0
+
+    res = session.get_coins_balance(accountType="FUND", coin="USDT")
+    balance_list = res["result"]["balance"]
+    
+    
+    usdt_item = next((item for item in balance_list if item["coin"] == "USDT"), None)
+    usdt_balance = float(usdt_item["availableToTrade"]) if usdt_item else 0.0
+    
+    print(f"USDT잔액 : {usdt_balance}")
 
 def get_target_info():
     # 확인할 코인 지정
   
-    try:
-        res = session.get_coins_balance(accountType="FUND", coin=coin_name.replace("USDT",""))
-        balance_list = res["result"]["balance"]
-        
-        
-        target = next((item for item in balance_list if item["coin"] == coin_name.repalce("USDT","")), None)
-        balance = float(target["walletBalance"]) if target else 0.0
-        
-        if(balance>0):
-            global isHavingCoin
-            isHavingCoin = True
-            
-        
-    except Exception as e:
-        print(f"❌ FUND 계정 {coin_name} 잔액 정보를 가져오는 중 오류 발생: {e}")
- 
-        
+  res = session.get_coins_balance(accountType="FUND", coin=coin_name.replace("USDT",""))
+  balance_list = res["result"]["balance"]
+  
+  
+  target = next((item for item in balance_list if item["coin"] == coin_name.replace("USDT","")), None)
+  balance = float(target["walletBalance"]) if target else 0.0
+  
+  if(balance>0):
+    global isHavingCoin
+    isHavingCoin = True
+      
+  print(f"{coin_name} 보유 개수: {balance}, isHavingCoin {isHavingCoin}")
+      
+def set_leverage():
+  global leverage
+  leverage = float(input("레버리지x :"))
+  
+  res = session.set_leverage(
+    category="linear",
+    symbol=coin_name,
+    buy_leverage=leverage,
+    sell_leverage=leverage
+  )
+
+  
+  print(f"✅ 레버리지 설정 완료: {res}")
+    
 
 # -------- FUNCTION LINE --------- ------------
-
-def set_leverage():
-    global leverage
-    try:
-        leverage = float(input("레버리지x :"))
-
-        res = session.set_leverage(
-            category="linear",
-            symbol=coin_name,
-            buy_leverage=leverage,
-            sell_leverage=leverage
-        )
-
-        print(f"✅ 레버리지 설정 완료: {res}")
-    except Exception as e:
-        print(f"❌ 레버리지 설정 실패: {e}")
+      
 def get_lowest_price():
     
     # 1. 기준치 전부터 현재까지 타임스탬프(ms)
@@ -423,60 +406,70 @@ def main_loop():
     
     last_lowest_update = time.time()
     
+    # 1) 잔고 조회
+    get_usdt()
+    # 2) 레버리지 설정 (여기서 한 번만 호출)
+    set_leverage()
+    # 3) 보유 코인 정보 초기화
+    get_target_info()
+    # 4) 매수/매도 라인 설정
+    get_lowest_price()
+    set_revenue_line()
+    
     while True:
         
-        # 최저가 갱신 by sec
-        now = time.time()
-        if now - last_lowest_update > 21600:
-            get_lowest_price()
-            set_revenue_line()
-            last_lowest_update = now  #갱신
+      # 최저가 갱신 by sec
+      now = time.time()
+      if now - last_lowest_update > 21600:
+          get_lowest_price()
+          set_revenue_line()
+          last_lowest_update = now  #갱신
 
-        response = session.get_tickers(
-            category="linear",
-            symbol = coin_name,
-            
-        )
-        
-        price = float(response['result']['list'][0]['lastPrice'])
-        date = datetime.now().date()
-        hour = datetime.now().hour
-        minute = datetime.now().minute
-        sec = datetime.now().second
-        
-        status = "default"
-        
-        # 매수 준비 체크 ---------
+      response = session.get_tickers(
+          category="linear",
+          symbol = coin_name,
+          
+      )
+      
+      price = float(response['result']['list'][0]['lastPrice'])
+      date = datetime.now().date()
+      hour = datetime.now().hour
+      minute = datetime.now().minute
+      sec = datetime.now().second
+      
+      status = "default"
+      
+      # 매수 준비 체크 ---------
 
-        if prev_price is not None and not isHavingCoin and price<=lowest:
-            if price >= prev_price:
-                status = "🔥 매수!"
-                
-                buy(price=price)
-            elif price < prev_price:
-                status = "🚨 매수 준비"
+      if prev_price is not None and not isHavingCoin and price<=lowest:
+          if price >= prev_price:
+              status = "🔥 매수!"
+              
+              buy(price=price)
+          elif price < prev_price:
+              status = "🚨 매수 준비"
 
-            
-        #매도 준비 체크 --------
-    
-        if prev_price is not None and isHavingCoin and price >= revenue_line:
-            if price <= prev_price:
-                status = "✨ 매도!"
-                
-                sell()
-            elif price > prev_price:
-                status = "🚨 매도 준비"
+          
+      #매도 준비 체크 --------
+  
+      if prev_price is not None and isHavingCoin and price >= revenue_line:
+          if price <= prev_price:
+              status = "✨ 매도!"
+              
+              sell()
+          elif price > prev_price:
+              status = "🚨 매도 준비"
 
-                
-        
-        prev_price = price
-        
-        
-        
-        print(f"[{date} {hour}:{minute}:{sec}] {coin_name} 가격 {price}$  |  상태 {status}")
-        
-            
-        time.sleep(3)
+              
+      
+      prev_price = price
+      
+      
+      
+      print(f"[{date} {hour}:{minute}:{sec}] {coin_name} 가격 {price}$  |  상태 {status}")
+      
+          
+      time.sleep(3)
       
 # 보유한 코인 리턴  
 def get_position_qty():
@@ -485,38 +478,40 @@ def get_position_qty():
     return float(pos["size"]) if pos["side"] == "Buy" else 0.0  # 롱 포지션일 때만 매도
 
 def buy(price):
-    global isHavingCoin
+
+    global isHavingCoin, usdt_balance
+
+    get_usdt()
 
     if usdt_balance <= 0:
         print("❌ USDT 잔고가 0입니다. 매수 중단.")
         return
 
-    buy_price_usdt = usdt_balance * leverage
+    buy_price_usdt = usdt_balance
 
-    qty = buy_price_usdt / price 
-    qty = int(qty // 10) * 10
+    qty = int(buy_price_usdt / price)
+    qty = (qty // 10 * 10)//2      
+
     
-    isHavingCoin = True
-
     order = session.place_order(
         category="linear",
         symbol=coin_name,
+        isLeverage=1,
         side="Buy",
         order_type="Market",
-        qty=round(qty, 3),
+        qty=str(qty),
         reduce_only=False
     )
 
     if order and order.get("retCode") == 0:
-        data = order["result"]
-        print(f"✅ 매수 완료: {data['cumExecQty']}개 약 {data['cumExecValue']} USDT")
+        print(f"✅ 매수 완료: {qty}개")
     else:
-        print(f"❌ 매수 실패: {order.get('retMsg')}")
+        print(f"❌ 매수 실패")
     
 
 def sell():
     
-    result = session.get_positions()
+    result = session.get_positions(category='linear', symbol=coin_name)
     pos = result["result"]["list"][0]
 
     if pos["side"] == "Buy":
@@ -535,20 +530,19 @@ def sell():
         # 결과 출력만 하고 리턴 안 함
         if order and order.get("retCode") == 0:
             data = order["result"]
-            print(f"✅ 전량 매도 완료: {data['qty']}개 @ 약 {data['cumExecValue']} USDT")
-
-            global isHavingCoin
-            isHavingCoin = False
+            print(f"✅ 전량 매도 완료: {pos['size']}개")
+            
+            global isHavingCoin, usdt_balanc
+            isHavingCoin=False
+            get_usdt()
         else:
             print(f"❌ 매도 실패: {order['retMsg']}")
     else:
         print("⛔ 롱 포지션이 없습니다.")
+        
+
     
-
-get_usdt()
-set_leverage()
-get_target_info()
-
-get_lowest_price()
-set_revenue_line()
-main_loop()
+if __name__ == "__main__":
+  
+  # 5) 메인 루프 진입
+  main_loop()
