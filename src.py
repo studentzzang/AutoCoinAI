@@ -105,7 +105,7 @@ def get_lowest_price():
     # 3. 최저가 찾기
     _lowest = min(klines, key=lambda x: float(x[3]))  # x[3] = lowPrice
     lowest_time = datetime.fromtimestamp(int(_lowest[0]) / 1000).astimezone(timezone.utc)
-    
+    print(f"⚾ {get_lowest_day}일 간 최저가: {float(_lowest[3])}")
     while(True):
       global lowest
       proper_lowest_per = float(input("매수 최저가 보정(%, 0~10) :"))
@@ -400,7 +400,7 @@ def set_revenue_line():
     
     revenue_line = lowest + (lowest * (revenue_per/100))    
     
-    print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line:.4f}$ 💡")
+    print(f"목표 수익률 (예상) {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line:.6f}$ 💡")
 
 def main_loop():
     
