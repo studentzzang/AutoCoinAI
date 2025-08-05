@@ -32,7 +32,6 @@ interval = "1"
     # 최저가 기준 가져올 n일전 기준의 n
 get_lowest_day = 2.5
 
-    
 
 # -------- ------ GETTING LINE (다른 함수에서 설정해줌) -------- ---------
 
@@ -51,7 +50,7 @@ isHavingCoin = False
 def get_usdt():
     global usdt_balance
     try:
-        res = session.get_coins_balance(accountType="FUND", coin="USDT")
+        res = session.get_coins_balance(accountType="UNIFIED", coin="USDT")
         balance_list = res["result"]["balance"]
         
         
@@ -191,7 +190,7 @@ def get_position_qty():
 
 def buy():
     global isHavingCoin
-
+    
     if usdt_balance <= 0:
         print("❌ USDT 잔고가 0입니다. 매수 중단.")
         return
@@ -203,7 +202,7 @@ def buy():
     price = float(ticker["result"]["list"][0]["lastPrice"])
 
     qty = int(buy_price_usdt / price)  # 일단 정수화
-    qty = qty // 10 * 10               
+    qty = qty // 10 * 10        
 
     isHavingCoin = True
 
@@ -218,9 +217,9 @@ def buy():
 
     if order and order.get("retCode") == 0:
         data = order["result"]
-        print(f"✅ 매수 완료: {data['cumExecQty']}개 약 {data['cumExecValue']} USDT")
+        print(f"✅ 매수 완료 amount: {qty} leverage: {leverage}")
     else:
-        print(f"❌ 매수 실패: {order.get('retMsg')}")
+        print(f"❌ 매수 실패")
     
 
 def sell():
@@ -244,12 +243,12 @@ def sell():
         # 결과 출력만 하고 리턴 안 함
         if order and order.get("retCode") == 0:
             data = order["result"]
-            print(f"✅ 전량 매도 완료: {data['qty']}개 @ 약 {data['cumExecValue']} USDT")
+            print(f"✅ 전량 매도 완료: {pos['size']}")
 
             global isHavingCoin
             isHavingCoin = False
         else:
-            print(f"❌ 매도 실패: {order['retMsg']}")
+            print(f"❌ 매도 실패")
     else:
         print("⛔ 롱 포지션이 없습니다.")
     
@@ -339,13 +338,16 @@ def get_target_info():
       
 def set_leverage():
   global leverage
-  leverage = float(input("레버리지x :"))
+  leverage = float(input("레버리지x :")) 
+  
+  if not leverage:
+    leverage=1
   
   res = session.set_leverage(
     category="linear",
     symbol=coin_name,
-    buy_leverage=leverage,
-    sell_leverage=leverage
+    buy_leverage=str(leverage),
+    sell_leverage=str(leverage)
   )
 
   
@@ -489,8 +491,7 @@ def buy(price):
 
     buy_price_usdt = usdt_balance
 
-    qty = int(buy_price_usdt / price)
-    qty = (qty // 10 * 10)//2      
+    qty = int((buy_price_usdt / price) / 2) // 10 * 10      
 
     
     order = session.place_order(
@@ -500,7 +501,7 @@ def buy(price):
         side="Buy",
         order_type="Market",
         qty=str(qty),
-        reduce_only=False
+        reduce_only=True
     )
 
     if order and order.get("retCode") == 0:
