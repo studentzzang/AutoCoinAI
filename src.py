@@ -24,51 +24,49 @@ if not _api_key or not _api_secret:
 coin_name = "DOGEUSDT"
 
     # 레버리지 설정(초보자 1이하 추천 x배);
-leverage = 0.8
+leverage = 1
 
     # interval 분봉가져옴 1=1min
 interval = "1"
 
-    # 기준 수익률 % (매도 기준 수익률 1~20 정도)
-revenue_per = 6
-
     # 최저가 기준 가져올 n일전 기준의 n
 get_lowest_day = 2.5
 
-    # 최저가에 조금 곱해줘서 최저가 기준을 높여 매수가능성 높임 (너무 높이면 수익률 하락, 0~5)
-proper_lowest_per = 2.5
+    
 
 # -------- ------ GETTING LINE (다른 함수에서 설정해줌) -------- ---------
 
 usdt_balance = 0
 lowest = 0
+# 기준 수익률 % (매도 기준 수익률 1~20 정도)
+revenue_per = 0
 revenue_line = 0
+
+# 최저가에 조금 곱해줘서 최저가 기준을 높여 매수가능성 높임 (너무 높이면 수익률 하락, 0~5)
+proper_lowest_per = 0
 
 isHavingCoin = False
 
 # ----Get USER INFO ---------------------
 def get_usdt():
-  balance_info = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0] # 전체 자산(USD 기준)
-  total_balance_usd = balance_info["totalAvailableBalance"]
+  try:
+        balance_info = session.get_wallet_balance(accountType="UNIFIED")["result"]["list"][0]
+        coin_list = balance_info["coin"]
 
+        global usdt_balance
+        usdt_coin = next((coin for coin in coin_list if coin["coin"] == "USDT"), None)
+        usdt_balance = float(usdt_coin["walletBalance"]) if usdt_coin else 0.0
 
-  print(f"자산: {total_balance_usd}$ (USD)")
+        print(f"✅ USDT 잔액: {usdt_balance} USDT")
 
-  # USDT 잔액 확인
-  balance_res = session.get_wallet_balance(accountType="UNIFIED")
-  coin_list = balance_res["result"]["list"][0]["coin"]
+  except Exception as e:
+      print(f"❌ USDT 잔액 정보를 가져오는 중 오류 발생: {e}")
+      usdt_balance = 0.0
 
-  # USDT 찾기
-  global usdt_balance
-  usdt_coin = next((coin for coin in coin_list if coin["coin"] == "USDT"), None)
-  usdt_balance = float(usdt_coin["walletBalance"]) if usdt_coin else 0.0
-  
-  
-  if usdt_balance or usdt_balance==0:
-      print(f"✅ USDT 잔액: {usdt_balance} USDT")
-  else:
-      print("❌ USDT 잔액 정보를 찾을 수 없습니다. USDT가 입금 되었는지 확인하세요.", usdt_balance)
-      
+  except Exception as e:
+      print(f"🚨 get_usdt() 오류 발생: {e}")
+      usdt_balance = 0.0
+
 def get_target_info():
   # 확인할 코인 지정
   
@@ -122,14 +120,24 @@ def get_lowest_price():
     _lowest = min(klines, key=lambda x: float(x[3]))  # x[3] = lowPrice
     lowest_time = datetime.fromtimestamp(int(_lowest[0]) / 1000).astimezone(timezone.utc)
     
-    global lowest
-    lowest = float(_lowest[3]) + float(_lowest[3]) * (proper_lowest_per/100.0)
+    while(True):
+      global lowest
+      proper_lowest_per = float(input("매수 최저가 보정(%, 0~10) :"))
+      lowest = float(_lowest[3]) + float(_lowest[3]) * (proper_lowest_per/100.0)
 
-    print(f"📉 매수 라인(최저가 {proper_lowest_per}%): {lowest:.4f} USDT at {lowest_time}")
+      isDone = input(f"📉 매수 라인(최저가 {proper_lowest_per}%): {lowest:.4f} USDT at {lowest_time} 시작하겠습니까? (Y/N)")
+      
+      if(isDone.upper()=="Y"): 
+        break
+      else:
+        continue
     
 def set_revenue_line():
     
     global revenue_line
+    
+    revenue_per = float(input("목표 수익률 입력: "))
+    
     revenue_line = lowest + (lowest * (revenue_per/100))    
     
     print(f"목표 수익률 {revenue_per}% ⬆️ / 매도 최저 라인 {revenue_line:.4f}$ 💡")
@@ -218,13 +226,7 @@ def buy():
     price = float(ticker["result"]["list"][0]["lastPrice"])
 
     qty = buy_price_usdt / price  # DOGE 수량
-
-    # ✅ 최소 수량 체크
-    MIN_QTY = 10  # 예: DOGE 최소 수량 (원하면 실제 API로 조회 가능)
-    if qty < MIN_QTY:
-        print(f"❌ 주문 수량이 너무 적습니다. (계산된 수량: {qty:.6f}, 최소 수량: {MIN_QTY})")
-        return
-
+    
     isHavingCoin = True
 
     order = session.place_order(
@@ -232,7 +234,7 @@ def buy():
         symbol=coin_name,
         side="Buy",
         order_type="Market",
-        qty=round(qty, 2),  # 소수점 자릿수 제한
+        qty=round(qty, 3),  # 소수점 자릿수 제한
         reduce_only=False
     )
 
