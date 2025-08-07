@@ -16,8 +16,8 @@ session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["DOGEUSDT"]
-LEVERAGE = ["3"] #  must be string
-PCT     = 30 # 투자비율 n% (후에 심볼 개수 비례도 구현)
+LEVERAGE = ["5"] #  must be string
+PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 INTERVAL = 1 #min
 EMA_PERIOD = 9
 MA_PERIOD = 28
@@ -25,17 +25,22 @@ MA_PERIOD = 28
 # ---- FUNC LINE -----
 
 def get_usdt():
-    bal = session.get_wallet_balance(accountType="UNIFIED")
-    usdt = float(bal["result"]["list"][0]["totalAvailableBalance"])
+    bal = session.get_coin_balance(accountType="UNIFIED", coin="USDT")
+    usdt = float(bal["result"]["balance"]["walletBalance"])
     
     return usdt
 
 def set_leverage(symbol, leverage):
-    session.set_leverage(
-        category='linear',
-        symbol=symbol,
-        leverage=leverage
-    )
+    
+    try:
+        session.set_leverage(
+            category='linear',
+            symbol=symbol,
+            buy_leverage=leverage,
+            sell_leverage=leverage,
+        )
+    except:
+        return
 
 def get_kline(symbol):
     
@@ -61,22 +66,22 @@ def get_current_price(symbol):
 def get_MAs(symbol): # index 0 = EMA(9), 1 = MA(28)
     
     kline = get_kline(symbol)
-    cur_price=cur_price(symbol)
+    cur_price=get_current_price(symbol)
     
     closes =  [float(k[4]) for k in kline]
     closes.append(cur_price)
     
     series = pd.Series(closes)
     
-    ema9_latest = series.ewm(span=9, adjust=False).mean().iloc[-1]
-    ma28_latest = series.rolling(window=28).mean().iloc[-1]
+    ema9_latest = series.ewm(span=9, adjust=False, min_periods=9).mean().iloc[-1]
+    ma28_latest = series.rolling(window=28, min_periods=28).mean().iloc[-1]
     
-    return list(ema9_latest, ma28_latest)
+    return[ema9_latest, ma28_latest]
 
 def get_position_size(symbol): #진입해있는 선물 개수
-    pos = session.get_position(category='linear', symbol=symbol)
+    pos = session.get_positions(category='linear', symbol=symbol)
     
-    size = float(pos['result']['list'][0]['size'])
+    size = int(pos['result']['list'][0]['size'])
     
 
 def get_gap(ema_short, ma_long):
@@ -99,6 +104,8 @@ def entry_position(symbol, side): #side "Buy"=long, "Sell"=short
         reduceOnly=False
     )
     
+    print(f"💡 {symbol} 진입 / 수량 {qty} ({side})")
+    
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
     
     qty = int(get_position_size(symbol=symbol))
@@ -110,8 +117,10 @@ def close_position(symbol, side): # side "Buy"=short , "Sell"=long
         side=side,
         reduceOnly=True,
         isLeverage=1,
-        qty=qty,
+        qty=str(qty),
     )
+    
+    print(f"📍 {symbol} 익절 / 수량 {qty}")
     
 
 # ---- MAIN LOOP ---
@@ -122,16 +131,40 @@ def start():
     
 def update():
     
-    status = ""
+    isInPosition = False
     
     while True:
         
         for i in range(len(SYMBOL)):
-            m_avgs = get_MAs(SYMBOL[i])
+            
+            symbol = SYMBOL[i]
+            
+            m_avgs = get_MAs(symbol)
             
             EMA_short = m_avgs[0]
             MA_long = m_avgs[1]
             
-            print(EMA_short, MA_long)
+            print(f"EMA(9) : {EMA_short}, MA(28): {MA_long}")
+            
+            if EMA_short>MA_long:
+
+                if isInPosition:
+                    close_position(symbol=symbol, side="Sell")
+                    isInPosition=False
+                else:
+                    entry_position(symbol=symbol, side="Buy")
+                    isInPosition = True
+                
+            
+            elif MA_long > EMA_short:
+                if isInPosition:
+                    close_position(symbol=symbol, side="Buy")
+                    isInPosition=False
+                else:
+                    entry_position(symbol=symbol, side="Sell")
+                    isInPosition = True
         
         time.sleep(10)
+
+start()
+update()
