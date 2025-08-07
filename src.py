@@ -83,6 +83,8 @@ def get_position_size(symbol): #진입해있는 선물 개수
     
     size = int(pos['result']['list'][0]['size'])
     
+    return size
+    
 
 def get_gap(ema_short, ma_long):
     return abs(ema_short - ma_long)
@@ -108,7 +110,7 @@ def entry_position(symbol, side): #side "Buy"=long, "Sell"=short
     
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
     
-    qty = int(get_position_size(symbol=symbol))
+    qty = get_position_size(symbol=symbol)
     
     session.place_order(
         category='linear',
