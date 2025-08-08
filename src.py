@@ -208,25 +208,27 @@ def update():
             shortSign_EMA = (EMA_1_22 > EMA_1_9)
             
              # ==== 최초 한 번: 현재 상태 저장하고 반대 크로스 나올 때까지 대기 ====
-            if init_regime is None:
-                init_regime = "golden" if longSign_EMA else "dead"
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🌱 초기 상태: {init_regime}. 반대 크로스 대기 시작")
-                continue  # 이번 루프는 종료
+            if not primed:
+                if (init_regime == "golden" and shortSign_EMA) or (init_regime == "dead" and longSign_EMA):
+                    primed = True
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 초기 레짐 반대 크로스 발생, 거래 시작")
+            else:
+                continue
 
             if not primed:
                 if init_regime == "golden" and shortSign_EMA or shortSign_candle:
                     primed = True
-                    print("[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 초기 golden → dead 발생, 거래 시작")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 초기 golden → dead 발생, 거래 시작")
                 elif init_regime == "dead" and longSign_EMA or longSign_candle:
                     primed = True
-                    print("[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]✅ 초기 dead → golden 발생, 거래 시작")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]✅ 초기 dead → golden 발생, 거래 시작")
                 else:
                     # 아직 반대 크로스 안 나왔으므로 계속 대기
                     continue
             
             # --조건 검사 및 실행--#
                 # 롱 진입
-            if(position is None) and long_filter and longSign_candle and longSign_EMA:
+            if(position is None) and (long_filter and longSign_candle or longSign_EMA):
                 
                 px, _ = entry_position(symbol, leverage= leverage, side="Buy")
                 
@@ -243,7 +245,7 @@ def update():
                 tp_price = None
                 
             #  숏 진입
-            if (position is None) and short_filter and shortSign_candle and shortSign_EMA:
+            if (position is None) and (short_filter and shortSign_candle or shortSign_EMA):
                 
                 px, _ = entry_position(symbol, leverage= leverage, side="Sell")
                 
