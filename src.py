@@ -45,7 +45,7 @@ def set_leverage(symbol, leverage):
             sell_leverage=leverage,
         )
         
-        print(f"🎯 {symbol} 레버리지 설정 완료: {leverage}x")
+        print(f"✅ {symbol} 레버리지 설정 완료: {leverage}x")
     except:
         
         print(f"📛 {symbol} 레버리지 에러-> 이미 설정이 되어있습니다.")
@@ -64,10 +64,9 @@ def get_kline(symbol, interval):
     
     return klines
 
-def get_current_price(symbol, interval):
+def get_current_price(symbol):
     t_res = session.get_tickers(
         category="linear",
-        interval=interval,
         symbol=symbol
     )
     current_price = float(t_res["result"]["list"][0]["lastPrice"])
@@ -101,7 +100,7 @@ def get_close_price(symbol, interval):
         category = 'linear',
     )
     
-    klines = resp["result"]["list"][::-1] #과거->현재
+    klines = resp["result"]["list"][::-1] # 0=3번째 전 1=2번째 전 2(-1)=현재 진행봉
 
     return [float(k[4]) for k in klines]
 
@@ -111,7 +110,7 @@ def get_gap(ema_short, ma_long):
 def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     
     value = get_usdt() * (PCT/ 100) # 구매할 usdt어치
-    cur_price = get_current_price(symbol, 1)
+    cur_price = get_current_price(symbol)
     
     qty = int((value * int(leverage)) / cur_price)
     
@@ -125,13 +124,29 @@ def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
         reduceOnly=False
     )
     
-    print(f"💡 {symbol} 진입 / 수량 {qty} ({side})")
+    print(f"💡[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 진입 / 수량 {qty} ({side})")
     
     return cur_price, qty
     
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
-    
+       
+    global entry_price
+
     qty = get_position_size(symbol=symbol)
+    
+    if qty <= 0:
+        print("📍 닫을 포지션 없음")
+        return
+    
+    current_price = get_current_price(symbol)
+
+    # 수익률 계산
+    if side == "Sell":  # 롱 포지션 청산
+        profit_pct = ((current_price - entry_price) / entry_price) * 100
+    elif side == "Buy":  # 숏 포지션 청산
+        profit_pct = ((entry_price - current_price) / entry_price) * 100
+    else:
+        profit_pct = 0
     
     session.place_order(
         category='linear',
@@ -143,7 +158,7 @@ def close_position(symbol, side): # side "Buy"=short , "Sell"=long
         qty=str(qty),
     )
     
-    print(f"📍 {symbol} 익절 / 수량 {qty}")
+    print(f"📍[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 익절 / 수량 {qty} / 💹 수익률 {profit_pct:.2f}%")
     
 
 # ---- MAIN LOOP ---
@@ -172,12 +187,12 @@ def update():
             
             klines_1 = get_close_price(symbol, interval=1) # get close price min 1
             
-            current_price_1 = get_current_price(symbol, interval=1)
-            kline_1 = klines_1[1] # 2분전
-            kline_2 = klines_1[0] # 1분전
+            current_price_1 = get_current_price(symbol)
+            kline_1 = klines_1[1] # 1분전
+            kline_2 = klines_1[0] # 2~2분전
 
             EMA_5_21 = get_EMA(symbol, interval=5, period=21)
-            current_price_5 = get_current_price(symbol, interval=5)
+            current_price_5 = get_close_price(symbol, interval=5)[-2] #직전마감
             
             
             # -- 조건부 -- #
@@ -195,16 +210,16 @@ def update():
              # ==== 최초 한 번: 현재 상태 저장하고 반대 크로스 나올 때까지 대기 ====
             if init_regime is None:
                 init_regime = "golden" if longSign_EMA else "dead"
-                print(f"🌱 초기 상태: {init_regime}. 반대 크로스 대기 시작")
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🌱 초기 상태: {init_regime}. 반대 크로스 대기 시작")
                 continue  # 이번 루프는 종료
 
             if not primed:
-                if init_regime == "golden" and shortSign_EMA:
+                if init_regime == "golden" and shortSign_EMA or shortSign_candle:
                     primed = True
-                    print("✅ 초기 golden → dead 발생, 거래 시작")
-                elif init_regime == "dead" and longSign_EMA:
+                    print("[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 초기 golden → dead 발생, 거래 시작")
+                elif init_regime == "dead" and longSign_EMA or longSign_candle:
                     primed = True
-                    print("✅ 초기 dead → golden 발생, 거래 시작")
+                    print("[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]✅ 초기 dead → golden 발생, 거래 시작")
                 else:
                     # 아직 반대 크로스 안 나왔으므로 계속 대기
                     continue
@@ -222,7 +237,7 @@ def update():
                 
                 # 롱 익절 (스위칭 금지: 여기서 끝내고 대기)
             if (position == "long") and (current_price_1 >= tp_price):
-                close_position(symbol, leverage= leverage, side="Sell")
+                close_position(symbol,side="Sell")
                 position = None
                 entry_price = None
                 tp_price = None
@@ -239,7 +254,7 @@ def update():
                 
             # 4) 숏 익절
             if (position == "short") and (current_price_1 <= tp_price):
-                close_position(symbol, leverage= leverage, side="Buy")
+                close_position(symbol,  side="Buy")
                 position = None
                 entry_price = None
                 tp_price = None
@@ -247,7 +262,7 @@ def update():
             # -- 정보 출력 -- #
             
 
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲현재가: {current_price_1}$ 포지션 {position} / EMA(9): {EMA_1_9:.6f}  EMA(22): {EMA_1_22:.6f}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {current_price_1}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_1_9:.6f}  EMA(22): {EMA_1_22:.6f}")
                         
   
         time.sleep(4)
