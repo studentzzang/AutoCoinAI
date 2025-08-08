@@ -20,7 +20,7 @@ LEVERAGE = ["5"] #  must be string
 PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 INTERVAL = 1 #min
 EMA_PERIOD = 9
-MA_PERIOD = 28
+MA_PERIOD = 19
 
 # ---- FUNC LINE -----
 
@@ -47,10 +47,10 @@ def get_kline(symbol):
     resp = session.get_kline(
         symbol=symbol,    
         interval="1",        
-        limit=200,           
+        limit=700,           
         category="linear",   
     )
-    klines = resp["result"]["list"]
+    klines = resp["result"]["list"][::-1]
     
     return klines
 
@@ -69,14 +69,14 @@ def get_MAs(symbol): # index 0 = EMA(9), 1 = MA(28)
     cur_price=get_current_price(symbol)
     
     closes =  [float(k[4]) for k in kline]
-    closes.append(cur_price)
+    #closes.append(cur_price)
     
     series = pd.Series(closes)
     
-    ema9_latest = series.ewm(span=9, adjust=False, min_periods=9).mean().iloc[-1]
-    ma28_latest = series.rolling(window=28, min_periods=28).mean().iloc[-1]
+    ema9_latest = series.ewm(span=EMA_PERIOD, adjust=False, min_periods=EMA_PERIOD).mean().iloc[-1]
+    ma_latest = series.rolling(window=MA_PERIOD, min_periods=MA_PERIOD).mean().iloc[-1]
     
-    return[ema9_latest, ma28_latest]
+    return[ema9_latest, ma_latest]
 
 def get_position_size(symbol): #진입해있는 선물 개수
     pos = session.get_positions(category='linear', symbol=symbol)
@@ -85,6 +85,17 @@ def get_position_size(symbol): #진입해있는 선물 개수
     
     return size
     
+def get_close_price(symbol):
+    resp = session.get_kline(
+        symbol=symbol,
+        interval = INTERVAL,
+        limit =3, # 종료된 봉2, 현재진행봉1, 종료된 봉만 리턴
+        category = 'linear',
+    )
+    
+    klines = resp["result"]["list"][::-1] #과거->현재
+
+    return [float(k[4]) for k in klines]
 
 def get_gap(ema_short, ma_long):
     return abs(ema_short - ma_long)
@@ -131,9 +142,12 @@ def start():
     for i in range(len(SYMBOL)):
         set_leverage(symbol=SYMBOL[i], leverage=LEVERAGE[i])
     
-def update():
     
-    isInPosition = False
+position= None
+def update():
+    global position
+    
+    status=""
     
     while True:
         
@@ -141,32 +155,53 @@ def update():
             
             symbol = SYMBOL[i]
             
-            m_avgs = get_MAs(symbol)
-            
+            m_avgs = get_MAs(symbol) # get MAs
             EMA_short = m_avgs[0]
             MA_long = m_avgs[1]
             
-            print(f"EMA(9) : {EMA_short}, MA(28): {MA_long}")
+            klines = get_close_price(symbol) # get close price
             
-            if EMA_short>MA_long:
-
-                if isInPosition:
-                    close_position(symbol=symbol, side="Sell")
-                    isInPosition=False
-                else:
-                    entry_position(symbol=symbol, side="Buy")
-                    isInPosition = True
+            current_price = get_current_price(symbol)
+            kline_1 = klines[1] # 2분전
+            kline_2 = klines[0] # 1분전
+            
+            if MA_long > EMA_short:
+                status = "데드 크로스"
                 
+                global position
+                if position == "long":
+                    
+                    global position
+                    position = "short"
+                    
+                    close_position(symbol, side='Buy')
+                    entry_position(symbol, side='Sell')
+                    
+                else: #최초 한 번
+                    entry_position(symbol=symbol, side='Sell')
+                
+            elif EMA_short > MA_long:
+                status="골든 크로스"
+                
+                global position
+                if position == "short":
+                    
+                    global position
+                    position = "long"
+                    
+                    close_position(symbol, side='Sell')
+                    entry_position(symbol, side='Buy')
+                    
+                else: #최초 한 번
+                    entry_position(symbol, side='Buy')
+                    
             
-            elif MA_long > EMA_short:
-                if isInPosition:
-                    close_position(symbol=symbol, side="Buy")
-                    isInPosition=False
-                else:
-                    entry_position(symbol=symbol, side="Sell")
-                    isInPosition = True
+            print(f"현재가: {current_price} / 1분전: {kline_1} 2분전: {kline_2} / EMA({EMA_PERIOD}) : {EMA_short:.7f}, MA({MA_PERIOD}): {MA_long:.7f} / {status} {position}")
+            
+            
+
         
-        time.sleep(10)
+        time.sleep(8)
 
 start()
 update()
