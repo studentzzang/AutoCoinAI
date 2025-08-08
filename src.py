@@ -40,10 +40,10 @@ def set_leverage(symbol, leverage):
             sell_leverage=leverage,
         )
         
-        print(f"{symbol} 레버리지 설정 완료: {leverage}x")
-    except Exception as e:
+        print(f"🎯 {symbol} 레버리지 설정 완료: {leverage}x")
+    except:
         
-        print(f"{symbol} 레버리지 에러발생 {e}")
+        print(f"📛 {symbol} 레버리지 에러-> 이미 설정이 되어있습니다.")
         
         return
 
@@ -105,12 +105,12 @@ def get_close_price(symbol):
 def get_gap(ema_short, ma_long):
     return abs(ema_short - ma_long)
 
-def entry_position(symbol, side): #side "Buy"=long, "Sell"=short
+def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     
     value = get_usdt() * (PCT/ 100) # 구매할 usdt어치
     cur_price = get_current_price(symbol)
     
-    qty = int(value / cur_price)
+    qty = int((value * int(leverage)) / cur_price)
     
     session.place_order(
         category='linear',
@@ -160,6 +160,7 @@ def update():
         for i in range(len(SYMBOL)):
             
             symbol = SYMBOL[i]
+            leverage = LEVERAGE[i]
             
             m_avgs = get_MAs(symbol) # get MAs
             EMA_short = m_avgs[0]
@@ -182,10 +183,10 @@ def update():
                     position = "short"
                     
                     close_position(symbol, side='Sell')
-                    entry_position(symbol, side='Sell')
+                    entry_position(symbol, leverage=leverage, side='Sell')
                     
                 elif not position: #최초 한 번
-                    entry_position(symbol=symbol, side='Sell')
+                    entry_position(symbol=symbol, leverage=leverage, side='Sell')
                     position="short"
                 
             elif EMA_short > MA_long:
@@ -196,10 +197,10 @@ def update():
                     position = "long"
                     
                     close_position(symbol, side='Buy')
-                    entry_position(symbol, side='Buy')
+                    entry_position(symbol, leverage=leverage, side='Buy')
                     
                 elif not position: #최초 한 번
-                    entry_position(symbol, side='Buy')
+                    entry_position(symbol, leverage=leverage, side='Buy')
                     position="long"
                     
             
