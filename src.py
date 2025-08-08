@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 from pybit.unified_trading import HTTP
 import os
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import time
 
 # ------ GET API KEY -----------------
@@ -17,6 +17,15 @@ session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 SYMBOL = ["DOGEUSDT"]
 LEVERAGE = ["1"] #  must be string
 PCT     = 20 # 투자비율 n% (후에 심볼 개수 비례도 구현)
+
+# --- GLOBAL VARIABLE LINE ---- #
+
+init_regime = None   # "golden" 또는 "dead"
+primed = False       # 반대 크로스가 한 번 나와 거래 시작 가능한지
+    
+position= None
+entry_price = None #포지션 진입가
+tp_price = None
 
 # ---- FUNC LINE -----
 
@@ -142,16 +151,12 @@ def close_position(symbol, side): # side "Buy"=short , "Sell"=long
 def start():
     for i in range(len(SYMBOL)):
         set_leverage(symbol=SYMBOL[i], leverage=LEVERAGE[i])
-    
-    
-position= None
-entry_price = None #포지션 진입가
-tp_price = None
+
+
 def update():
     
-    global position
-    global entry_price
-    global tp_price
+    global position, entry_price, tp_price
+    global init_regime, primed
     
     status=""
     
@@ -174,6 +179,7 @@ def update():
             EMA_5_21 = get_EMA(symbol, interval=5, period=21)
             current_price_5 = get_current_price(symbol, interval=5)
             
+            
             # -- 조건부 -- #
             
                 # 필터 (1차, 큰방향)
@@ -185,6 +191,23 @@ def update():
             
             longSign_EMA = (EMA_1_9 > EMA_1_22)
             shortSign_EMA = (EMA_1_22 > EMA_1_9)
+            
+             # ==== 최초 한 번: 현재 상태 저장하고 반대 크로스 나올 때까지 대기 ====
+            if init_regime is None:
+                init_regime = "golden" if longSign_EMA else "dead"
+                print(f"🌱 초기 상태: {init_regime}. 반대 크로스 대기 시작")
+                continue  # 이번 루프는 종료
+
+            if not primed:
+                if init_regime == "golden" and shortSign_EMA:
+                    primed = True
+                    print("✅ 초기 golden → dead 발생, 거래 시작")
+                elif init_regime == "dead" and longSign_EMA:
+                    primed = True
+                    print("✅ 초기 dead → golden 발생, 거래 시작")
+                else:
+                    # 아직 반대 크로스 안 나왔으므로 계속 대기
+                    continue
             
             # --조건 검사 및 실행--#
                 # 롱 진입
@@ -223,7 +246,8 @@ def update():
                 
             # -- 정보 출력 -- #
             
-            print(f"🪙 {symbol} 💲현재가: {current_price_1}$ 포지션 {position} / EMA(9): {EMA_1_9:.6f}  EMA(22): {EMA_1_22:.6f}")
+
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲현재가: {current_price_1}$ 포지션 {position} / EMA(9): {EMA_1_9:.6f}  EMA(22): {EMA_1_22:.6f}")
                         
   
         time.sleep(4)
