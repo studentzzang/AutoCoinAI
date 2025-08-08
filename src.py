@@ -166,6 +166,9 @@ def update():
             kline_1 = klines[1] # 2분전
             kline_2 = klines[0] # 1분전
             
+            isLongSign = kline_1 > EMA_short and kline_2 > EMA_short and current_price > EMA_short
+            isShortSign = kline_1 < EMA_short and kline_2 < EMA_short and current_price < EMA_short
+            
             if MA_long > EMA_short:
                 status = "데드 크로스"
                 
@@ -173,7 +176,7 @@ def update():
                     
                     position = "short"
                     
-                    close_position(symbol, side='Buy')
+                    close_position(symbol, side='Sell')
                     entry_position(symbol, side='Sell')
                     
                 elif not position: #최초 한 번
@@ -187,7 +190,7 @@ def update():
                     
                     position = "long"
                     
-                    close_position(symbol, side='Sell')
+                    close_position(symbol, side='Buy')
                     entry_position(symbol, side='Buy')
                     
                 elif not position: #최초 한 번
