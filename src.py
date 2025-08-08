@@ -16,7 +16,7 @@ session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["DOGEUSDT"]
 LEVERAGE = ["1"] #  must be string
-PCT     = 20 # 투자비율 n% (후에 심볼 개수 비례도 구현)
+PCT     = 10 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
 # --- GLOBAL VARIABLE LINE ---- #
 
@@ -207,24 +207,25 @@ def update():
             longSign_EMA = (EMA_1_9 > EMA_1_22)
             shortSign_EMA = (EMA_1_22 > EMA_1_9)
             
-             # ==== 최초 한 번: 현재 상태 저장하고 반대 크로스 나올 때까지 대기 ====
-            if not primed:
-                if (init_regime == "golden" and shortSign_EMA) or (init_regime == "dead" and longSign_EMA):
-                    primed = True
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 초기 레짐 반대 크로스 발생, 거래 시작")
-            else:
+             # ==== 최초 1회: 현재 상태 저장 ====
+            if init_regime is None:
+                
+                init_regime = "golden" if longSign_EMA else "dead"
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🌱 초기 상태: {init_regime}. 반대 크로스 대기 시작")
+                
                 continue
 
+            # ==== primed 될 때까지: '반대 크로스'만 보고 대기 ====
             if not primed:
-                if init_regime == "golden" and shortSign_EMA or shortSign_candle:
+                
+                if ((init_regime == "golden" and shortSign_EMA) or (init_regime == "dead"   and longSign_EMA)):
+                    
                     primed = True
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 초기 golden → dead 발생, 거래 시작")
-                elif init_regime == "dead" and longSign_EMA or longSign_candle:
-                    primed = True
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]✅ 초기 dead → golden 발생, 거래 시작")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 반대 크로스 발생, 거래 시작")
+                    
                 else:
-                    # 아직 반대 크로스 안 나왔으므로 계속 대기
                     continue
+
             
             # --조건 검사 및 실행--#
                 # 롱 진입
