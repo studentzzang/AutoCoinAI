@@ -16,8 +16,8 @@ session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["DOGEUSDT"]
-LEVERAGE = ["5"] #  must be string
-PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
+LEVERAGE = ["50"] #  must be string
+PCT     = 80 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 INTERVAL = 1 #min
 EMA_PERIOD = 9
 MA_PERIOD = 19
@@ -39,7 +39,12 @@ def set_leverage(symbol, leverage):
             buy_leverage=leverage,
             sell_leverage=leverage,
         )
-    except:
+        
+        print(f"{symbol} 레버리지 설정 완료: {leverage}x")
+    except Exception as e:
+        
+        print(f"{symbol} 레버리지 에러발생 {e}")
+        
         return
 
 def get_kline(symbol):
@@ -203,7 +208,7 @@ def update():
             
 
         
-        time.sleep(8)
+        time.sleep(20)
 
 start()
 update()
