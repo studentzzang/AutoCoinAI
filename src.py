@@ -145,6 +145,7 @@ def start():
     
 position= None
 def update():
+    
     global position
     
     status=""
@@ -168,32 +169,30 @@ def update():
             if MA_long > EMA_short:
                 status = "데드 크로스"
                 
-                global position
                 if position == "long":
                     
-                    global position
                     position = "short"
                     
                     close_position(symbol, side='Buy')
                     entry_position(symbol, side='Sell')
                     
-                else: #최초 한 번
+                elif not position: #최초 한 번
                     entry_position(symbol=symbol, side='Sell')
+                    position="short"
                 
             elif EMA_short > MA_long:
                 status="골든 크로스"
                 
-                global position
                 if position == "short":
                     
-                    global position
                     position = "long"
                     
                     close_position(symbol, side='Sell')
                     entry_position(symbol, side='Buy')
                     
-                else: #최초 한 번
+                elif not position: #최초 한 번
                     entry_position(symbol, side='Buy')
+                    position="long"
                     
             
             print(f"현재가: {current_price} / 1분전: {kline_1} 2분전: {kline_2} / EMA({EMA_PERIOD}) : {EMA_short:.7f}, MA({MA_PERIOD}): {MA_long:.7f} / {status} {position}")
