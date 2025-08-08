@@ -4,7 +4,6 @@ import os
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 import time
-import sys
 
 # ------ GET API KEY -----------------
 load_dotenv()
@@ -16,11 +15,8 @@ session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["DOGEUSDT"]
-LEVERAGE = ["50"] #  must be string
-PCT     = 80 # 투자비율 n% (후에 심볼 개수 비례도 구현)
-INTERVAL = 1 #min
-EMA_PERIOD = 9
-MA_PERIOD = 19
+LEVERAGE = ["1"] #  must be string
+PCT     = 20 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
 # ---- FUNC LINE -----
 
@@ -47,11 +43,11 @@ def set_leverage(symbol, leverage):
         
         return
 
-def get_kline(symbol):
+def get_kline(symbol, interval):
     
     resp = session.get_kline(
         symbol=symbol,    
-        interval="1",        
+        interval=str(interval),        
         limit=700,           
         category="linear",   
     )
@@ -59,29 +55,27 @@ def get_kline(symbol):
     
     return klines
 
-def get_current_price(symbol):
+def get_current_price(symbol, interval):
     t_res = session.get_tickers(
         category="linear",
+        interval=interval,
         symbol=symbol
     )
     current_price = float(t_res["result"]["list"][0]["lastPrice"])
     
     return current_price
 
-def get_MAs(symbol): # index 0 = EMA(9), 1 = MA(28)
+def get_EMA(symbol, period, interval): # index 0 = EMA(9), 1 = MA(28)
     
-    kline = get_kline(symbol)
-    cur_price=get_current_price(symbol)
+    kline = get_kline(symbol, interval)
     
     closes =  [float(k[4]) for k in kline]
-    #closes.append(cur_price)
     
     series = pd.Series(closes)
     
-    ema9_latest = series.ewm(span=EMA_PERIOD, adjust=False, min_periods=EMA_PERIOD).mean().iloc[-1]
-    ma_latest = series.rolling(window=MA_PERIOD, min_periods=MA_PERIOD).mean().iloc[-1]
+    ema_latest = series.ewm(span=period, adjust=False, min_periods=period).mean().iloc[-1]
     
-    return[ema9_latest, ma_latest]
+    return ema_latest
 
 def get_position_size(symbol): #진입해있는 선물 개수
     pos = session.get_positions(category='linear', symbol=symbol)
@@ -90,10 +84,10 @@ def get_position_size(symbol): #진입해있는 선물 개수
     
     return size
     
-def get_close_price(symbol):
+def get_close_price(symbol, interval):
     resp = session.get_kline(
         symbol=symbol,
-        interval = INTERVAL,
+        interval = str(interval),
         limit =3, # 종료된 봉2, 현재진행봉1, 종료된 봉만 리턴
         category = 'linear',
     )
@@ -108,7 +102,7 @@ def get_gap(ema_short, ma_long):
 def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     
     value = get_usdt() * (PCT/ 100) # 구매할 usdt어치
-    cur_price = get_current_price(symbol)
+    cur_price = get_current_price(symbol, 1)
     
     qty = int((value * int(leverage)) / cur_price)
     
@@ -123,6 +117,8 @@ def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     )
     
     print(f"💡 {symbol} 진입 / 수량 {qty} ({side})")
+    
+    return cur_price, qty
     
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
     
@@ -149,9 +145,13 @@ def start():
     
     
 position= None
+entry_price = None #포지션 진입가
+tp_price = None
 def update():
     
     global position
+    global entry_price
+    global tp_price
     
     status=""
     
@@ -162,54 +162,71 @@ def update():
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
             
-            m_avgs = get_MAs(symbol) # get MAs
-            EMA_short = m_avgs[0]
-            MA_long = m_avgs[1]
+            EMA_1_9 = get_EMA(symbol, interval=1, period=9) # get MAs
+            EMA_1_22 = get_EMA(symbol, interval=1, period=22)
             
-            klines = get_close_price(symbol) # get close price
+            klines_1 = get_close_price(symbol, interval=1) # get close price min 1
             
-            current_price = get_current_price(symbol)
-            kline_1 = klines[1] # 2분전
-            kline_2 = klines[0] # 1분전
-            
-            isLongSign = kline_1 > EMA_short and kline_2 > EMA_short and current_price > EMA_short
-            isShortSign = kline_1 < EMA_short and kline_2 < EMA_short and current_price < EMA_short
-            
-            if MA_long > EMA_short:
-                status = "데드 크로스"
-                
-                if position == "long":
-                    
-                    position = "short"
-                    
-                    close_position(symbol, side='Sell')
-                    entry_position(symbol, leverage=leverage, side='Sell')
-                    
-                elif not position: #최초 한 번
-                    entry_position(symbol=symbol, leverage=leverage, side='Sell')
-                    position="short"
-                
-            elif EMA_short > MA_long:
-                status="골든 크로스"
-                
-                if position == "short":
-                    
-                    position = "long"
-                    
-                    close_position(symbol, side='Buy')
-                    entry_position(symbol, leverage=leverage, side='Buy')
-                    
-                elif not position: #최초 한 번
-                    entry_position(symbol, leverage=leverage, side='Buy')
-                    position="long"
-                    
-            
-            print(f"현재가: {current_price} / 1분전: {kline_1} 2분전: {kline_2} / EMA({EMA_PERIOD}) : {EMA_short:.7f}, MA({MA_PERIOD}): {MA_long:.7f} / {status} {position}")
-            
-            
+            current_price_1 = get_current_price(symbol, interval=1)
+            kline_1 = klines_1[1] # 2분전
+            kline_2 = klines_1[0] # 1분전
 
-        
-        time.sleep(20)
+            EMA_5_21 = get_EMA(symbol, interval=5, period=21)
+            current_price_5 = get_current_price(symbol, interval=5)
+            
+            # -- 조건부 -- #
+            
+                # 필터 (1차, 큰방향)
+            long_filter = (current_price_5 > EMA_5_21)
+            short_filter = (current_price_5 < EMA_5_21)
+            
+            longSign_candle = kline_1 > EMA_1_9 and kline_2 > EMA_1_9 and current_price_1 > EMA_1_9
+            shortSign_candle = kline_1 < EMA_1_9 and kline_2 < EMA_1_9 and current_price_1 < EMA_1_9
+            
+            longSign_EMA = (EMA_1_9 > EMA_1_22)
+            shortSign_EMA = (EMA_1_22 > EMA_1_9)
+            
+            # --조건 검사 및 실행--#
+                # 롱 진입
+            if(position is None) and long_filter and longSign_candle and longSign_EMA:
+                
+                px, _ = entry_position(symbol, leverage= leverage, side="Buy")
+                
+                position = "long"
+                entry_price = px
+                TP_PCT = 0.008  # 0.8%
+                tp_price = entry_price * (1 + TP_PCT)
+                
+                # 롱 익절 (스위칭 금지: 여기서 끝내고 대기)
+            if (position == "long") and (current_price_1 >= tp_price):
+                close_position(symbol, leverage= leverage, side="Sell")
+                position = None
+                entry_price = None
+                tp_price = None
+                
+            #  숏 진입
+            if (position is None) and short_filter and shortSign_candle and shortSign_EMA:
+                
+                px, _ = entry_position(symbol, leverage= leverage, side="Sell")
+                
+                position = "short"
+                entry_price = px
+                TP_PCT = 0.008  # 0.8% 예시
+                tp_price = entry_price * (1 - TP_PCT)
+                
+            # 4) 숏 익절
+            if (position == "short") and (current_price_1 <= tp_price):
+                close_position(symbol, leverage= leverage, side="Buy")
+                position = None
+                entry_price = None
+                tp_price = None
+                
+            # -- 정보 출력 -- #
+            
+            print(f"🪙 {symbol} 💲현재가: {current_price_1}$ 포지션 {position} / EMA(9): {EMA_1_9:.6f}  EMA(22): {EMA_1_22:.6f}")
+                        
+  
+        time.sleep(4)
 
 start()
 update()
