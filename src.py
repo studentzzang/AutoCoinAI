@@ -14,9 +14,9 @@ _api_secret = os.getenv("API_KEY_SECRET")
 session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["DOGEUSDT"]
+SYMBOL = ["PUMPFUNUSDT"]
 LEVERAGE = ["1"] #  must be string
-PCT     = 10 # 투자비율 n% (후에 심볼 개수 비례도 구현)
+PCT     = 25 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
 # --- GLOBAL VARIABLE LINE ---- #
 
@@ -129,7 +129,7 @@ def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     return cur_price, qty
     
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
-       
+    
     global entry_price
 
     qty = get_position_size(symbol=symbol)
@@ -170,9 +170,8 @@ def start():
 
 def update():
     
-    global position, entry_price, tp_price
+    global position, entry_price
     global init_regime, primed
-    
     status=""
     
     while True:
@@ -182,32 +181,26 @@ def update():
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
             
-            EMA_1_9 = get_EMA(symbol, interval=1, period=9) # get MAs
-            EMA_1_22 = get_EMA(symbol, interval=1, period=22)
+            EMA_9 = get_EMA(symbol, interval=3, period=9) # get MAs
+            EMA_28 = get_EMA(symbol, interval=3, period=28)
             
-            klines_1 = get_close_price(symbol, interval=1) # get close price min 1
+            klines_3 = get_close_price(symbol, interval=3) # get close price min 1
             
-            current_price_1 = get_current_price(symbol)
-            kline_1 = klines_1[1] # 1분전
-            kline_2 = klines_1[0] # 2~2분전
+            kline_1 = klines_3[1] # 1x3분전
+            kline_2 = klines_3[0] # 2~3x3분전
+            cur_3 = klines_3[-1] # 현재 진행
 
-            EMA_5_21 = get_EMA(symbol, interval=5, period=21)
-            current_price_5 = get_close_price(symbol, interval=5)[-2] #직전마감
-            
-            
+
             # -- 조건부 -- #
+          
+            longSign_candle = (kline_1 > kline_2 and cur_3 > kline_1 and cur_3 > EMA_28)
+            shortSign_candle = (kline_1 < kline_2 and cur_3 < kline_1 and cur_3 < EMA_9)
             
-                # 필터 (1차, 큰방향)
-            long_filter = (current_price_5 > EMA_5_21)
-            short_filter = (current_price_5 < EMA_5_21)
+            longSign_EMA = (EMA_9 > EMA_28)
+            shortSign_EMA = (EMA_28 > EMA_9)
             
-            longSign_candle = kline_1 > EMA_1_9 and kline_2 > EMA_1_9 and current_price_1 > EMA_1_9
-            shortSign_candle = kline_1 < EMA_1_9 and kline_2 < EMA_1_9 and current_price_1 < EMA_1_9
-            
-            longSign_EMA = (EMA_1_9 > EMA_1_22)
-            shortSign_EMA = (EMA_1_22 > EMA_1_9)
-            
-             # ==== 최초 1회: 현재 상태 저장 ====
+            """
+                # ==== 최초 1회: 현재 상태 저장 ====
             if init_regime is None:
                 
                 init_regime = "golden" if longSign_EMA else "dead"
@@ -217,56 +210,46 @@ def update():
 
             # ==== primed 될 때까지: '반대 크로스'만 보고 대기 ====
             if not primed:
+              
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📶 EMA(9): {EMA_9:.6f}  EMA(22): {EMA_28:.6f}")
                 
-                if ((init_regime == "golden" and shortSign_EMA) or (init_regime == "dead"   and longSign_EMA)):
+                if ((init_regime == "golden" and (shortSign_EMA or shortSign_candle)) 
+                    or (init_regime == "dead"  and (longSign_EMA or longSign_candle))):
                     
                     primed = True
                     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 반대 크로스 발생, 거래 시작")
                     
                 else:
                     continue
+                    """
+            # --- 조건 검사 및 실행 --- #
+            
+            if position == 'short' and ( longSign_EMA):
+                close_position(symbol=symbol, side='Buy')  # leverage 인자 넣지 않음
+                position=None
+                
+            if position == 'long' and (shortSign_EMA):
+                close_position(symbol=symbol, side="Sell")
+                position = None
+                
+            if (position is None) and (longSign_EMA):
+                px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                if qty > 0:
+                    position = 'long'
+                    entry_price = px
+
+            if (position is None) and (shortSign_EMA):
+                px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
+                if qty > 0:
+                    position = 'short'
+                    entry_price = px
 
             
-            # --조건 검사 및 실행--#
-                # 롱 진입
-            if(position is None) and (long_filter and longSign_candle or longSign_EMA):
-                
-                px, _ = entry_position(symbol, leverage= leverage, side="Buy")
-                
-                position = "long"
-                entry_price = px
-                TP_PCT = 0.008  # 0.8%
-                tp_price = entry_price * (1 + TP_PCT)
-                
-                # 롱 익절 (스위칭 금지: 여기서 끝내고 대기)
-            if (position == "long") and (current_price_1 >= tp_price):
-                close_position(symbol,side="Sell")
-                position = None
-                entry_price = None
-                tp_price = None
-                
-            #  숏 진입
-            if (position is None) and (short_filter and shortSign_candle or shortSign_EMA):
-                
-                px, _ = entry_position(symbol, leverage= leverage, side="Sell")
-                
-                position = "short"
-                entry_price = px
-                TP_PCT = 0.008  # 0.8% 예시
-                tp_price = entry_price * (1 - TP_PCT)
-                
-            # 4) 숏 익절
-            if (position == "short") and (current_price_1 <= tp_price):
-                close_position(symbol,  side="Buy")
-                position = None
-                entry_price = None
-                tp_price = None
-                
+              
             # -- 정보 출력 -- #
             
 
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {current_price_1}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_1_9:.6f}  EMA(22): {EMA_1_22:.6f}")
-                        
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(22): {EMA_28:.6f}")                
   
         time.sleep(4)
 
