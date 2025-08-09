@@ -104,8 +104,23 @@ def get_close_price(symbol, interval):
 
     return [float(k[4]) for k in klines]
 
-def get_gap(ema_short, ma_long):
-    return abs(ema_short - ma_long)
+def get_RSI(symbol, interval, period=14):
+    kline = get_kline(symbol, interval) 
+    closes = [float(k[4]) for k in kline]
+    series = pd.Series(closes)
+
+    delta = series.diff()
+    up = delta.clip(lower=0)      # 상승폭
+    down = -delta.clip(upper=0)   # 하락폭
+
+    # 평균 상승/하락 (Wilder's smoothing)
+    avg_gain = up.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = down.ewm(alpha=1/period, adjust=False).mean()
+
+    rs = avg_gain / avg_loss.replace(0, 1e-10)
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.iloc[-1] 
 
 def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     
@@ -189,6 +204,8 @@ def update():
             kline_1 = klines_3[1] # 1x3분전
             kline_2 = klines_3[0] # 2~3x3분전
             cur_3 = klines_3[-1] # 현재 진행
+            
+            RSI_14 = get_RSI(symbol, interval=3, period=14)
 
 
             # -- 조건부 -- #
@@ -249,7 +266,7 @@ def update():
             # -- 정보 출력 -- #
             
 
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(22): {EMA_28:.6f}")                
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(22): {EMA_28:.6f} | ❣ RSI: {RSI_14}")                
   
         time.sleep(4)
 
