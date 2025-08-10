@@ -14,7 +14,7 @@ _api_secret = os.getenv("API_KEY_SECRET")
 session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["PUMPFUNUSDT"]
+SYMBOL = ["DOGEUSDT"]
 LEVERAGE = ["1"] #  must be string
 PCT     = 25 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
@@ -184,90 +184,89 @@ def start():
 
 
 def update():
-    
     global position, entry_price
     global init_regime, primed
-    status=""
-    
+
+    RSI_LO, RSI_HI = 35,65
+    NEUTRAL_LO, NEUTRAL_HI = 43, 57
+    COOLDOWN_SEC =  180  # 3분봉 기준 한 바(혹은 그 이상) 쉬기
+
+    prev_rsi_map = {s: None for s in SYMBOL}
+    last_trade_ts = {s: None for s in SYMBOL}
+
     while True:
-        
+        now_ts = time.time()
+
         for i in range(len(SYMBOL)):
-            
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
-            
-            EMA_9 = get_EMA(symbol, interval=3, period=9) # get MAs
+
+            EMA_9  = get_EMA(symbol, interval=3, period=9)
             EMA_28 = get_EMA(symbol, interval=3, period=28)
-            
-            klines_3 = get_close_price(symbol, interval=3) # get close price min 1
-            
-            kline_1 = klines_3[1] # 1x3분전
-            kline_2 = klines_3[0] # 2~3x3분전
-            cur_3 = klines_3[-1] # 현재 진행
-            
+            klines_3 = get_close_price(symbol, interval=3)
+            kline_1 = klines_3[1]
+            kline_2 = klines_3[0]
+            cur_3   = klines_3[-1]
+
             RSI_14 = get_RSI(symbol, interval=3, period=14)
+            prev_rsi = prev_rsi_map[symbol]
 
-
-            # -- 조건부 -- #
-          
-            longSign_candle = (kline_1 > kline_2 and cur_3 > kline_1 and cur_3 > EMA_28)
-            shortSign_candle = (kline_1 < kline_2 and cur_3 < kline_1 and cur_3 < EMA_9)
-            
-            longSign_EMA = (EMA_9 > EMA_28)
+            longSign_EMA  = (EMA_9 > EMA_28)
             shortSign_EMA = (EMA_28 > EMA_9)
-            
-            """
-                # ==== 최초 1회: 현재 상태 저장 ====
-            if init_regime is None:
-                
-                init_regime = "golden" if longSign_EMA else "dead"
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🌱 초기 상태: {init_regime}. 반대 크로스 대기 시작")
-                
-                continue
 
-            # ==== primed 될 때까지: '반대 크로스'만 보고 대기 ====
-            if not primed:
-              
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📶 EMA(9): {EMA_9:.6f}  EMA(22): {EMA_28:.6f}")
-                
-                if ((init_regime == "golden" and (shortSign_EMA or shortSign_candle)) 
-                    or (init_regime == "dead"  and (longSign_EMA or longSign_candle))):
-                    
-                    primed = True
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✅ 반대 크로스 발생, 거래 시작")
-                    
-                else:
-                    continue
-                    """
-            # --- 조건 검사 및 실행 --- #
-            
-            if position == 'short' and ( longSign_EMA):
-                close_position(symbol=symbol, side='Buy')  # leverage 인자 넣지 않음
-                position=None
-                
-            if position == 'long' and (shortSign_EMA):
+            # RSI 신호 변수명과 실제 기준 차이 있을 수 있음 주의 (맨 위 확인)
+            rsi_cross_up_30 = (prev_rsi is not None) and (prev_rsi <= RSI_LO) and (RSI_14 > RSI_LO)
+            rsi_cross_dn_70 = (prev_rsi is not None) and (prev_rsi >= RSI_HI) and (RSI_14 < RSI_HI)
+
+            rsi_neutral = (NEUTRAL_LO <= RSI_14 <= NEUTRAL_HI)
+
+            rsi_long_ok  = rsi_cross_up_30 or ((RSI_14 < 44) and (prev_rsi is not None) and (RSI_14 > prev_rsi) and (cur_3 >= EMA_9))
+            rsi_short_ok = rsi_cross_dn_70 or ((RSI_14 > 56) and (prev_rsi is not None) and (RSI_14 < prev_rsi) and (cur_3 <= EMA_9))
+
+            cooldown_ok = (last_trade_ts[symbol] is None) or (now_ts - last_trade_ts[symbol] >= COOLDOWN_SEC)
+
+            # ===== 청산(OR) : 반전 나오면 즉시 탈출 =====
+            if position == 'long' and (shortSign_EMA or rsi_cross_dn_70 or (RSI_14 <= RSI_LO)):
                 close_position(symbol=symbol, side="Sell")
                 position = None
-                
-            if (position is None) and (longSign_EMA):
-                px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                if qty > 0:
-                    position = 'long'
-                    entry_price = px
+                entry_price = None
+                last_trade_ts[symbol] = time.time()
+                prev_rsi_map[symbol] = RSI_14
+                continue
 
-            if (position is None) and (shortSign_EMA):
-                px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
-                if qty > 0:
-                    position = 'short'
-                    entry_price = px
+            if position == 'short' and (longSign_EMA or rsi_cross_up_30 or (RSI_14 >= RSI_HI)):
+                close_position(symbol=symbol, side="Buy")
+                position = None
+                entry_price = None
+                last_trade_ts[symbol] = time.time()
+                prev_rsi_map[symbol] = RSI_14
+                continue
 
-            
-              
-            # -- 정보 출력 -- #
-            
+            # ===== 신규 진입(AND) : 추세 + 타이밍 + 쿨다운 + 비중립 =====
+            if (position is None) and cooldown_ok and (not rsi_neutral):
+                if longSign_EMA and rsi_long_ok:
+                    px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                    if qty > 0:
+                        position = 'long'
+                        entry_price = px
+                        last_trade_ts[symbol] = time.time()
+                        prev_rsi_map[symbol] = RSI_14
+                        continue
 
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(22): {EMA_28:.6f} | ❣ RSI: {RSI_14}")                
-  
+                if shortSign_EMA and rsi_short_ok:
+                    px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
+                    if qty > 0:
+                        position = 'short'
+                        entry_price = px
+                        last_trade_ts[symbol] = time.time()
+                        prev_rsi_map[symbol] = RSI_14
+                        continue
+
+            # 정보 출력
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(28): {EMA_28:.6f} | ❣ RSI: {RSI_14:.2f}")
+
+            prev_rsi_map[symbol] = RSI_14
+
         time.sleep(4)
 
 start()
