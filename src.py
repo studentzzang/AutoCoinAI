@@ -187,9 +187,9 @@ def update():
     global position, entry_price
     global init_regime, primed
 
-    RSI_LO, RSI_HI = 35,65
-    NEUTRAL_LO, NEUTRAL_HI = 43, 57
-    COOLDOWN_SEC =  180  # 3분봉 기준 한 바(혹은 그 이상) 쉬기
+    RSI_LO, RSI_HI = 35, 65
+    NEUTRAL_LO, NEUTRAL_HI = 45, 55
+    COOLDOWN_SEC = 45 #거래 후 대기
 
     prev_rsi_map = {s: None for s in SYMBOL}
     last_trade_ts = {s: None for s in SYMBOL}
@@ -214,41 +214,44 @@ def update():
             longSign_EMA  = (EMA_9 > EMA_28)
             shortSign_EMA = (EMA_28 > EMA_9)
 
-            # RSI 신호 변수명과 실제 기준 차이 있을 수 있음 주의 (맨 위 확인)
+            # --- RSI 교차 ---
             rsi_cross_up_30 = (prev_rsi is not None) and (prev_rsi <= RSI_LO) and (RSI_14 > RSI_LO)
             rsi_cross_dn_70 = (prev_rsi is not None) and (prev_rsi >= RSI_HI) and (RSI_14 < RSI_HI)
 
+            # --- 중립 밴드 ---
             rsi_neutral = (NEUTRAL_LO <= RSI_14 <= NEUTRAL_HI)
 
-            rsi_long_ok  = rsi_cross_up_30 or ((RSI_14 < 44) and (prev_rsi is not None) and (RSI_14 > prev_rsi) and (cur_3 >= EMA_9))
-            rsi_short_ok = rsi_cross_dn_70 or ((RSI_14 > 56) and (prev_rsi is not None) and (RSI_14 < prev_rsi) and (cur_3 <= EMA_9))
+            # --- 모멘텀 진입 허용: EMA9 재돌파 + RSI가 50선 방향 ---
+            momo_long  = (RSI_14 >= 52) and (kline_1 <= EMA_9) and (cur_3 > EMA_9)
+            momo_short = (RSI_14 <= 48) and (kline_1 >= EMA_9) and (cur_3 < EMA_9)
+
+            # --- 최종 타이밍 신호(둘 중 하나면 OK) ---
+            rsi_long_ok  = rsi_cross_up_30  or momo_long
+            rsi_short_ok = rsi_cross_dn_70 or momo_short
 
             cooldown_ok = (last_trade_ts[symbol] is None) or (now_ts - last_trade_ts[symbol] >= COOLDOWN_SEC)
 
-            # ===== 청산(OR) : 반전 나오면 즉시 탈출 =====
+            # ===== 청산 (OR) =====
             if position == 'long' and (shortSign_EMA or rsi_cross_dn_70 or (RSI_14 <= RSI_LO)):
                 close_position(symbol=symbol, side="Sell")
-                position = None
-                entry_price = None
+                position = None; entry_price = None
                 last_trade_ts[symbol] = time.time()
                 prev_rsi_map[symbol] = RSI_14
                 continue
 
             if position == 'short' and (longSign_EMA or rsi_cross_up_30 or (RSI_14 >= RSI_HI)):
                 close_position(symbol=symbol, side="Buy")
-                position = None
-                entry_price = None
+                position = None; entry_price = None
                 last_trade_ts[symbol] = time.time()
                 prev_rsi_map[symbol] = RSI_14
                 continue
 
-            # ===== 신규 진입(AND) : 추세 + 타이밍 + 쿨다운 + 비중립 =====
+            # ===== 신규 진입 (AND) =====
             if (position is None) and cooldown_ok and (not rsi_neutral):
                 if longSign_EMA and rsi_long_ok:
                     px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                     if qty > 0:
-                        position = 'long'
-                        entry_price = px
+                        position = 'long'; entry_price = px
                         last_trade_ts[symbol] = time.time()
                         prev_rsi_map[symbol] = RSI_14
                         continue
@@ -256,13 +259,11 @@ def update():
                 if shortSign_EMA and rsi_short_ok:
                     px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                     if qty > 0:
-                        position = 'short'
-                        entry_price = px
+                        position = 'short'; entry_price = px
                         last_trade_ts[symbol] = time.time()
                         prev_rsi_map[symbol] = RSI_14
                         continue
 
-            # 정보 출력
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(28): {EMA_28:.6f} | ❣ RSI: {RSI_14:.2f}")
 
             prev_rsi_map[symbol] = RSI_14
