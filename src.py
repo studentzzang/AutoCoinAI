@@ -209,14 +209,31 @@ def update():
 def update():
     global position, entry_price
 
-    COOLDOWN_SEC = 45  # 거래 후 대기
-    RSI_ARM = 65       # 익절 무장 임계
-    RSI_EXIT_SOFT = 55 # 익절 트리거 (안전선)
-    RSI_EXIT_HARD = 50 # 보수적 하드선(보조)
+    # ===== 파라미터 =====
+    COOLDOWN_SEC = 45
+    RSI_ARM = 68            # 익절 무장 임계
+    RSI_EXIT_SOFT = 60      # 무장 후 하향시 익절
+    RSI_EXIT_HARD = 55      # 추가 안전선
+
+    ATR_PERIOD = 14
+    ATR_STOP_MULT = 1.2     # 초기 스탑: entry - 1.2*ATR (롱)
+    MIN_BB_WIDTH = 0.008    # BB 상대폭 >= 0.8% 일 때만 진입(저변동 회피)
+
+    # *** 꼭대기 추격 방지 ***
+    MAX_EXT_ATR = 0.6       # (닫힌봉종가-EMA9)/ATR <= 0.6
+    MAX_EXT_PCT = 0.005     # (닫힌봉종가-EMA9)/가격 <= 0.5%
+    BIG_RANGE_ATR = 1.2     # 전봉(high-low) >= 1.2*ATR 이면 추격 금지
+    RETEST_LOOKBACK = 3     # 최근 3봉 안에 EMA9 '터치' 후 재이탈 확인
+    CROSS_LOOKBACK = 5      # 최근 5봉 내 골든크로스 허용
+    ONE_TRADE_PER_BAR = True
+    TIMEOUT_BARS = 10       # ARM 못 찍으면 10봉 내 정리
 
     prev_rsi_map = {s: None for s in SYMBOL}
     last_trade_ts = {s: None for s in SYMBOL}
-    rsi_armed = {s: False for s in SYMBOL}   # 포지션 보유 중 65↑ 터치 여부
+    rsi_armed = {s: False for s in SYMBOL}
+    sl_map = {s: None for s in SYMBOL}
+    entry_bar_idx = {s: None for s in SYMBOL}
+    last_trade_bar_idx = {s: None for s in SYMBOL}
 
     while True:
         now_ts = time.time()
@@ -225,97 +242,152 @@ def update():
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
 
-            # --- 데이터 준비: 3분봉 전체, 종가 시리즈 ---
+            # --- 데이터 ---
             kl = get_kline(symbol, interval=3)  # oldest -> newest
-            closes = pd.Series([float(k[4]) for k in kl])
-
-            if len(closes) < 28:  # EMA28, SMA20 계산 안정화용 최소 길이
+            if len(kl) < 40:
                 continue
 
-            # --- 지표 계산: EMA9/28, 볼린저 중단선(SMA20) ---
-            ema9_series  = closes.ewm(span=9, adjust=False, min_periods=9).mean()
-            ema28_series = closes.ewm(span=28, adjust=False, min_periods=28).mean()
-            sma20_series = closes.rolling(window=20, min_periods=20).mean()
+            closes = pd.Series([float(k[4]) for k in kl])
+            highs  = pd.Series([float(k[2]) for k in kl])
+            lows   = pd.Series([float(k[3]) for k in kl])
 
-            EMA_9  = float(ema9_series.iloc[-1])
-            EMA_28 = float(ema28_series.iloc[-1])
-            BB_MID = float(sma20_series.iloc[-1])
+            # 지표
+            ema9  = closes.ewm(span=9,  adjust=False, min_periods=9).mean()
+            ema28 = closes.ewm(span=28, adjust=False, min_periods=28).mean()
+            sma20 = closes.rolling(window=20, min_periods=20).mean()
+            std20 = closes.rolling(window=20, min_periods=20).std()
+            upper = sma20 + 2*std20
+            lower = sma20 - 2*std20
+            bb_width = (upper - lower) / sma20
 
-            # RSI 최신값
-            RSI_14 = float(get_RSI(symbol, interval=3, period=14))
-            prev_rsi = prev_rsi_map[symbol]
+            prev_close = closes.shift(1)
+            tr = pd.concat([
+                highs - lows,
+                (highs - prev_close).abs(),
+                (lows  - prev_close).abs()
+            ], axis=1).max(axis=1)
+            atr = tr.ewm(alpha=1/ATR_PERIOD, adjust=False).mean()
 
-            # --- 조건 구성 ---
-            # 1) EMA 골든크로스(직전<=, 현재>)
-            ema_cross_up = (
-                not pd.isna(ema9_series.iloc[-2]) and not pd.isna(ema28_series.iloc[-2]) and
-                (ema9_series.iloc[-2] <= ema28_series.iloc[-2]) and (ema9_series.iloc[-1] > ema28_series.iloc[-1])
-            )
+            # 최신값(참고), '전봉' 값(신호판단용)
+            EMA9_CUR, EMA28_CUR = float(ema9.iloc[-1]), float(ema28.iloc[-1])
+            EMA9_PREV, EMA28_PREV = float(ema9.iloc[-2]), float(ema28.iloc[-2])
+            BB_MID_PREV = float(sma20.iloc[-2]) if not pd.isna(sma20.iloc[-2]) else None
+            BBW = float(bb_width.iloc[-1]) if not pd.isna(bb_width.iloc[-1]) else 0.0
+            ATR = float(atr.iloc[-1])
+            c_cur = get_current_price(symbol)
+            c_prev = float(closes.iloc[-2])
+            h_prev = float(highs.iloc[-2])
+            l_prev = float(lows.iloc[-2])
 
-            # 2) 최근 3개 종가가 '각 시점의' EMA9 위
-            last3_closes = closes.iloc[-3:]
-            last3_ema9   = ema9_series.iloc[-3:]
-            last3_sma20  = sma20_series.iloc[-3:]
+            # RSI 시리즈(전봉/현재 둘 다 확보)
+            delta = closes.diff()
+            up = delta.clip(lower=0)
+            down = -delta.clip(upper=0)
+            avg_gain = up.ewm(alpha=1/14, adjust=False).mean()
+            avg_loss = down.ewm(alpha=1/14, adjust=False).mean()
+            rs = avg_gain / avg_loss.replace(0, 1e-10)
+            rsi_series = 100 - (100 / (1 + rs))
+            RSI_PREV = float(rsi_series.iloc[-2])
+            RSI_CUR  = float(rsi_series.iloc[-1])
 
-            three_above_ema9  = (last3_closes > last3_ema9).all()
-            three_above_bbmid = (last3_closes > last3_sma20).all()
+            bar_idx = len(closes)
+            per_bar_ok = (not ONE_TRADE_PER_BAR) or (last_trade_bar_idx[symbol] is None) or (bar_idx > last_trade_bar_idx[symbol])
 
-            # (A) 추세/모멘텀 충족: EMA 크로스 OR (3봉이 EMA9 또는 BB중단선 위)
-            trend_ok = ema_cross_up or (three_above_ema9 or three_above_bbmid)
+            # ---- 추세/기울기 ----
+            ema_trend_up = (EMA9_CUR > EMA28_CUR) and (ema9.iloc[-1] > ema9.iloc[-2])
 
-            # (B) RSI 조건: 50 이상
-            rsi_ok = (RSI_14 >= 50)
+            # ---- 최근 골든크로스(완료봉 기준) ----
+            cross_up_series = (ema9.shift(1) <= ema28.shift(1)) & (ema9 > ema28)
+            ema_cross_up_recent = bool(cross_up_series.iloc[-(CROSS_LOOKBACK+1):-1].any())
 
-            # 쿨다운 조건
+            # ---- 3봉 기준(완료봉) ----
+            last3_cl = closes.iloc[-(RETEST_LOOKBACK+1):-1]
+            last3_e9 = ema9.iloc[-(RETEST_LOOKBACK+1):-1]
+            last3_sm = sma20.iloc[-(RETEST_LOOKBACK+1):-1]
+            three_above_ema9  = (last3_cl > last3_e9).all()
+            three_above_bbmid = (not last3_sm.isna().any()) and (last3_cl > last3_sm).all()
+
+            # ---- 리테스트 확인: 최근 N봉 중 '저가가 EMA9 터치' + '종가가 EMA9 위' ----
+            touched = (lows.iloc[-(RETEST_LOOKBACK+1):-1] <= (ema9.iloc[-(RETEST_LOOKBACK+1):-1] * 1.001)).any()
+            confirm = (last3_cl.iloc[-1] > last3_e9.iloc[-1]) if len(last3_cl) > 0 else False
+            retest_ok = bool(touched and confirm)
+
+            # ---- 과확장(꼭대기 추격 방지) ----
+            ext_atr = (c_prev - EMA9_PREV) / max(ATR, 1e-12)
+            ext_pct = (c_prev - EMA9_PREV) / max(c_prev, 1e-12)
+            no_overextend = (ext_atr <= MAX_EXT_ATR) and (ext_pct <= MAX_EXT_PCT)
+            big_range = (h_prev - l_prev) >= BIG_RANGE_ATR * ATR
+
+            # ---- 변동성/쿨다운 ----
+            vol_ok = (BBW >= MIN_BB_WIDTH) if BBW == BBW else False
             cooldown_ok = (last_trade_ts[symbol] is None) or (now_ts - last_trade_ts[symbol] >= COOLDOWN_SEC)
 
-            # ========== 포지션 관리 ==========
-            # (선택) 이전에 숏이 남아있다면 정리하고 롱 전략만 수행
-            if position == 'short':
-                close_position(symbol=symbol, side="Buy")
-                position = None
-                entry_price = None
+            # ====== 스탑(가격) ======
+            if position == 'long' and sl_map[symbol] is not None and c_cur <= sl_map[symbol]:
+                close_position(symbol=symbol, side="Sell")
+                position = None; entry_price = None
                 last_trade_ts[symbol] = time.time()
                 rsi_armed[symbol] = False
-                prev_rsi_map[symbol] = RSI_14
+                sl_map[symbol] = None
+                entry_bar_idx[symbol] = None
+                last_trade_bar_idx[symbol] = bar_idx
+                prev_rsi_map[symbol] = RSI_CUR
                 continue
 
-            # ----- 익절 로직: RSI 65↑ 무장 후, 55↓(또는 50↓) 하향 시 청산 -----
+            # ====== RSI 익절(ARM → EXIT) ======
             if position == 'long' and entry_price is not None:
-                # 무장(arm): 보유 중 RSI가 65 이상을 한 번이라도 터치하면 True
-                if not rsi_armed[symbol] and RSI_14 >= RSI_ARM:
+                if not rsi_armed[symbol] and RSI_CUR >= RSI_ARM:
                     rsi_armed[symbol] = True
-
-                # 무장 후 55 아래로 내려오면 익절. (하드선 50은 추가 안전장치)
-                if rsi_armed[symbol] and (RSI_14 <= RSI_EXIT_SOFT or RSI_14 <= RSI_EXIT_HARD):
+                if rsi_armed[symbol] and (RSI_CUR <= RSI_EXIT_SOFT or RSI_CUR <= RSI_EXIT_HARD):
                     close_position(symbol=symbol, side="Sell")
-                    position = None
-                    entry_price = None
+                    position = None; entry_price = None
                     last_trade_ts[symbol] = time.time()
                     rsi_armed[symbol] = False
-                    prev_rsi_map[symbol] = RSI_14
+                    sl_map[symbol] = None
+                    entry_bar_idx[symbol] = None
+                    last_trade_bar_idx[symbol] = bar_idx
+                    prev_rsi_map[symbol] = RSI_CUR
                     continue
 
-            # ----- 신규 롱 진입 -----
-            if (position is None) and cooldown_ok and trend_ok and rsi_ok:
-                px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                if qty > 0:
-                    position = 'long'
-                    entry_price = px
-                    last_trade_ts[symbol] = time.time()
-                    rsi_armed[symbol] = (RSI_14 >= RSI_ARM)  # 진입 직후 이미 65 이상이라면 곧바로 무장
-                    prev_rsi_map[symbol] = RSI_14
-                    continue
+                # 타임아웃: ARM 못 찍고 TIMEOUT_BARS 경과 → 정리
+                if entry_bar_idx[symbol] is not None and (bar_idx - entry_bar_idx[symbol] >= TIMEOUT_BARS) and (not rsi_armed[symbol]):
+                    if (c_cur <= entry_price*1.001) or (RSI_CUR < 50):
+                        close_position(symbol=symbol, side="Sell")
+                        position = None; entry_price = None
+                        last_trade_ts[symbol] = time.time()
+                        rsi_armed[symbol] = False
+                        sl_map[symbol] = None
+                        entry_bar_idx[symbol] = None
+                        last_trade_bar_idx[symbol] = bar_idx
+                        prev_rsi_map[symbol] = RSI_CUR
+                        continue
 
-            # 모니터링 로그
-            cur_px = float(closes.iloc[-1])
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} "
-                  f"💲{cur_px:.6f} | EMA9 {EMA_9:.6f} / EMA28 {EMA_28:.6f} / BBmid {BB_MID:.6f} | "
-                  f"RSI {RSI_14:.2f} | pos {position} | "
-                  f"entry {entry_price if entry_price else '-'} | "
-                  f"arm {rsi_armed[symbol]} | cool {cooldown_ok}")
+            # ====== 신규 롱 진입 (닫힌 봉 기준) ======
+            # 조건: 추세상승 & (최근 크로스 or 3봉 상방) & 리테스트 확인 & 과확장 아님 & 전봉 과대범위 아님 & RSI 50 상향 돌파
+            rsi_cross_up_50 = (prev_rsi_map[symbol] is not None) and (prev_rsi_map[symbol] <= 50) and (RSI_CUR > 50)
+            if (position is None) and cooldown_ok and per_bar_ok and vol_ok and ema_trend_up:
+                if ( (ema_cross_up_recent or (three_above_ema9 or three_above_bbmid))
+                     and retest_ok and no_overextend and (not big_range) and rsi_cross_up_50 ):
+                    px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                    if qty > 0:
+                        position = 'long'; entry_price = px
+                        last_trade_ts[symbol] = time.time()
+                        rsi_armed[symbol] = (RSI_CUR >= RSI_ARM)
+                        sl_map[symbol] = px - ATR_STOP_MULT * ATR
+                        entry_bar_idx[symbol] = bar_idx
+                        last_trade_bar_idx[symbol] = bar_idx
+                        prev_rsi_map[symbol] = RSI_CUR
+                        continue
 
-            prev_rsi_map[symbol] = RSI_14
+            # ---- 로그 ----
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} "
+                  f"px {c_cur:.6f} | EMA9 {EMA9_CUR:.6f}/EMA28 {EMA28_CUR:.6f} | "
+                  f"ext_atr {ext_atr:.2f} ext_pct {ext_pct*100:.2f}% | "
+                  f"BBW {BBW:.4f} ATR {ATR:.6f} | RSI {RSI_CUR:.2f} | "
+                  f"trend {ema_trend_up} crossRecent {ema_cross_up_recent} retest {retest_ok} "
+                  f"| overext {not no_overextend} bigbar {big_range} | pos {position} SL {sl_map[symbol]}")
+
+            prev_rsi_map[symbol] = RSI_CUR
 
         time.sleep(9)
 
