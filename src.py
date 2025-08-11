@@ -268,7 +268,7 @@ def update():
 
             prev_rsi_map[symbol] = RSI_14
 
-        time.sleep(4)
+        time.sleep(9)
 
 start()
 update()
