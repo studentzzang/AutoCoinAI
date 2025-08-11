@@ -15,8 +15,8 @@ session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["DOGEUSDT"]
-LEVERAGE = ["1"] #  must be string
-PCT     = 25 # 투자비율 n% (후에 심볼 개수 비례도 구현)
+LEVERAGE = ["3"] #  must be string
+PCT     = 30 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
 # --- GLOBAL VARIABLE LINE ---- #
 
@@ -189,10 +189,34 @@ def update():
 
     RSI_LO, RSI_HI = 35, 65
     NEUTRAL_LO, NEUTRAL_HI = 45, 55
-    COOLDOWN_SEC = 45 #거래 후 대기
+    COOLDOWN_SEC = 45  # 거래 후 대기
+
+    # --- 익절 파라미터 ---
+    TP_BASE = 0.008       # 기본 목표익 (0.8%)
+    TP_STRONG = 0.012     # 강세 시 목표익 (1.2%)
+    TP_WEAK = 0.006       # 약세 시 축소 목표익 (0.6%)
+
+    TRAIL_ACTIVATE = 0.006   # 트레일링 발동 최소 이익 (0.6%)
+    TRAIL_BACK = 0.004       # 피크 대비 되돌림폭 (0.4%)
 
     prev_rsi_map = {s: None for s in SYMBOL}
     last_trade_ts = {s: None for s in SYMBOL}
+
+    # 피크/트로프(트레일링용)
+    peak_map = {s: None for s in SYMBOL}    # 롱에서 최고가
+    trough_map = {s: None for s in SYMBOL}  # 숏에서 최저가
+
+def update():
+    global position, entry_price
+
+    COOLDOWN_SEC = 45  # 거래 후 대기
+    RSI_ARM = 65       # 익절 무장 임계
+    RSI_EXIT_SOFT = 55 # 익절 트리거 (안전선)
+    RSI_EXIT_HARD = 50 # 보수적 하드선(보조)
+
+    prev_rsi_map = {s: None for s in SYMBOL}
+    last_trade_ts = {s: None for s in SYMBOL}
+    rsi_armed = {s: False for s in SYMBOL}   # 포지션 보유 중 65↑ 터치 여부
 
     while True:
         now_ts = time.time()
@@ -201,74 +225,101 @@ def update():
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
 
-            EMA_9  = get_EMA(symbol, interval=3, period=9)
-            EMA_28 = get_EMA(symbol, interval=3, period=28)
-            klines_3 = get_close_price(symbol, interval=3)
-            kline_1 = klines_3[1]
-            kline_2 = klines_3[0]
-            cur_3   = klines_3[-1]
+            # --- 데이터 준비: 3분봉 전체, 종가 시리즈 ---
+            kl = get_kline(symbol, interval=3)  # oldest -> newest
+            closes = pd.Series([float(k[4]) for k in kl])
 
-            RSI_14 = get_RSI(symbol, interval=3, period=14)
+            if len(closes) < 28:  # EMA28, SMA20 계산 안정화용 최소 길이
+                continue
+
+            # --- 지표 계산: EMA9/28, 볼린저 중단선(SMA20) ---
+            ema9_series  = closes.ewm(span=9, adjust=False, min_periods=9).mean()
+            ema28_series = closes.ewm(span=28, adjust=False, min_periods=28).mean()
+            sma20_series = closes.rolling(window=20, min_periods=20).mean()
+
+            EMA_9  = float(ema9_series.iloc[-1])
+            EMA_28 = float(ema28_series.iloc[-1])
+            BB_MID = float(sma20_series.iloc[-1])
+
+            # RSI 최신값
+            RSI_14 = float(get_RSI(symbol, interval=3, period=14))
             prev_rsi = prev_rsi_map[symbol]
 
-            longSign_EMA  = (EMA_9 > EMA_28)
-            shortSign_EMA = (EMA_28 > EMA_9)
+            # --- 조건 구성 ---
+            # 1) EMA 골든크로스(직전<=, 현재>)
+            ema_cross_up = (
+                not pd.isna(ema9_series.iloc[-2]) and not pd.isna(ema28_series.iloc[-2]) and
+                (ema9_series.iloc[-2] <= ema28_series.iloc[-2]) and (ema9_series.iloc[-1] > ema28_series.iloc[-1])
+            )
 
-            # --- RSI 교차 ---
-            rsi_cross_up_30 = (prev_rsi is not None) and (prev_rsi <= RSI_LO) and (RSI_14 > RSI_LO)
-            rsi_cross_dn_70 = (prev_rsi is not None) and (prev_rsi >= RSI_HI) and (RSI_14 < RSI_HI)
+            # 2) 최근 3개 종가가 '각 시점의' EMA9 위
+            last3_closes = closes.iloc[-3:]
+            last3_ema9   = ema9_series.iloc[-3:]
+            last3_sma20  = sma20_series.iloc[-3:]
 
-            # --- 중립 밴드 ---
-            rsi_neutral = (NEUTRAL_LO <= RSI_14 <= NEUTRAL_HI)
+            three_above_ema9  = (last3_closes > last3_ema9).all()
+            three_above_bbmid = (last3_closes > last3_sma20).all()
 
-            # --- 모멘텀 진입 허용: EMA9 재돌파 + RSI가 50선 방향 ---
-            momo_long  = (RSI_14 >= 52) and (kline_1 <= EMA_9) and (cur_3 > EMA_9)
-            momo_short = (RSI_14 <= 48) and (kline_1 >= EMA_9) and (cur_3 < EMA_9)
+            # (A) 추세/모멘텀 충족: EMA 크로스 OR (3봉이 EMA9 또는 BB중단선 위)
+            trend_ok = ema_cross_up or (three_above_ema9 or three_above_bbmid)
 
-            # --- 최종 타이밍 신호(둘 중 하나면 OK) ---
-            rsi_long_ok  = rsi_cross_up_30  or momo_long
-            rsi_short_ok = rsi_cross_dn_70 or momo_short
+            # (B) RSI 조건: 50 이상
+            rsi_ok = (RSI_14 >= 50)
 
+            # 쿨다운 조건
             cooldown_ok = (last_trade_ts[symbol] is None) or (now_ts - last_trade_ts[symbol] >= COOLDOWN_SEC)
 
-            # ===== 청산 (OR) =====
-            if position == 'long' and (shortSign_EMA or rsi_cross_dn_70 or (RSI_14 <= RSI_LO)):
-                close_position(symbol=symbol, side="Sell")
-                position = None; entry_price = None
-                last_trade_ts[symbol] = time.time()
-                prev_rsi_map[symbol] = RSI_14
-                continue
-
-            if position == 'short' and (longSign_EMA or rsi_cross_up_30 or (RSI_14 >= RSI_HI)):
+            # ========== 포지션 관리 ==========
+            # (선택) 이전에 숏이 남아있다면 정리하고 롱 전략만 수행
+            if position == 'short':
                 close_position(symbol=symbol, side="Buy")
-                position = None; entry_price = None
+                position = None
+                entry_price = None
                 last_trade_ts[symbol] = time.time()
+                rsi_armed[symbol] = False
                 prev_rsi_map[symbol] = RSI_14
                 continue
 
-            # ===== 신규 진입 (AND) =====
-            if (position is None) and cooldown_ok and (not rsi_neutral):
-                if longSign_EMA and rsi_long_ok:
-                    px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                    if qty > 0:
-                        position = 'long'; entry_price = px
-                        last_trade_ts[symbol] = time.time()
-                        prev_rsi_map[symbol] = RSI_14
-                        continue
+            # ----- 익절 로직: RSI 65↑ 무장 후, 55↓(또는 50↓) 하향 시 청산 -----
+            if position == 'long' and entry_price is not None:
+                # 무장(arm): 보유 중 RSI가 65 이상을 한 번이라도 터치하면 True
+                if not rsi_armed[symbol] and RSI_14 >= RSI_ARM:
+                    rsi_armed[symbol] = True
 
-                if shortSign_EMA and rsi_short_ok:
-                    px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
-                    if qty > 0:
-                        position = 'short'; entry_price = px
-                        last_trade_ts[symbol] = time.time()
-                        prev_rsi_map[symbol] = RSI_14
-                        continue
+                # 무장 후 55 아래로 내려오면 익절. (하드선 50은 추가 안전장치)
+                if rsi_armed[symbol] and (RSI_14 <= RSI_EXIT_SOFT or RSI_14 <= RSI_EXIT_HARD):
+                    close_position(symbol=symbol, side="Sell")
+                    position = None
+                    entry_price = None
+                    last_trade_ts[symbol] = time.time()
+                    rsi_armed[symbol] = False
+                    prev_rsi_map[symbol] = RSI_14
+                    continue
 
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(28): {EMA_28:.6f} | ❣ RSI: {RSI_14:.2f}")
+            # ----- 신규 롱 진입 -----
+            if (position is None) and cooldown_ok and trend_ok and rsi_ok:
+                px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                if qty > 0:
+                    position = 'long'
+                    entry_price = px
+                    last_trade_ts[symbol] = time.time()
+                    rsi_armed[symbol] = (RSI_14 >= RSI_ARM)  # 진입 직후 이미 65 이상이라면 곧바로 무장
+                    prev_rsi_map[symbol] = RSI_14
+                    continue
+
+            # 모니터링 로그
+            cur_px = float(closes.iloc[-1])
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} "
+                  f"💲{cur_px:.6f} | EMA9 {EMA_9:.6f} / EMA28 {EMA_28:.6f} / BBmid {BB_MID:.6f} | "
+                  f"RSI {RSI_14:.2f} | pos {position} | "
+                  f"entry {entry_price if entry_price else '-'} | "
+                  f"arm {rsi_armed[symbol]} | cool {cooldown_ok}")
 
             prev_rsi_map[symbol] = RSI_14
 
         time.sleep(9)
+
+
 
 start()
 update()
