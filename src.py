@@ -170,29 +170,6 @@ def start():
 
 def update():
     global position, entry_price
-    global init_regime, primed
-
-    RSI_LO, RSI_HI = 35, 65
-    NEUTRAL_LO, NEUTRAL_HI = 45, 55
-    COOLDOWN_SEC = 45  # 거래 후 대기
-
-    # --- 익절 파라미터 ---
-    TP_BASE = 0.008       # 기본 목표익 (0.8%)
-    TP_STRONG = 0.012     # 강세 시 목표익 (1.2%)
-    TP_WEAK = 0.006       # 약세 시 축소 목표익 (0.6%)
-
-    TRAIL_ACTIVATE = 0.006   # 트레일링 발동 최소 이익 (0.6%)
-    TRAIL_BACK = 0.004       # 피크 대비 되돌림폭 (0.4%)
-
-    prev_rsi_map = {s: None for s in SYMBOL}
-    last_trade_ts = {s: None for s in SYMBOL}
-
-    # 피크/트로프(트레일링용)
-    peak_map = {s: None for s in SYMBOL}    # 롱에서 최고가
-    trough_map = {s: None for s in SYMBOL}  # 숏에서 최저가
-
-def update():
-    global position, entry_price
 
     # ===== 파라미터 =====
     COOLDOWN_SEC = 45
@@ -395,6 +372,7 @@ def update():
   
         time.sleep(4)
 >>>>>>> parent of d99564b (Feat: get RSI function)
+
 
 start()
 update()
