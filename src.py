@@ -214,6 +214,9 @@ def update():
             kline_1 = klines_3[1] # 1x3분전
             kline_2 = klines_3[0] # 2~3x3분전
             cur_3 = klines_3[-1] # 현재 진행
+<<<<<<< HEAD
+>>>>>>> parent of d99564b (Feat: get RSI function)
+=======
 >>>>>>> parent of d99564b (Feat: get RSI function)
 
             # --- 데이터 ---
@@ -336,6 +339,7 @@ def update():
                         prev_rsi_map[symbol] = RSI_CUR
                         continue
 
+<<<<<<< HEAD
             # ====== 신규 롱 진입 (닫힌 봉 기준) ======
             # 조건: 추세상승 & (최근 크로스 or 3봉 상방) & 리테스트 확인 & 과확장 아님 & 전봉 과대범위 아님 & RSI 50 상향 돌파
             rsi_cross_up_50 = (prev_rsi_map[symbol] is not None) and (prev_rsi_map[symbol] <= 50) and (RSI_CUR > 50)
@@ -368,6 +372,8 @@ def update():
 
 <<<<<<< HEAD
 =======
+=======
+>>>>>>> parent of d99564b (Feat: get RSI function)
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(22): {EMA_28:.6f}")                
   
         time.sleep(4)
