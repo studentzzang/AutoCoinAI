@@ -217,6 +217,9 @@ def update():
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
+>>>>>>> parent of d99564b (Feat: get RSI function)
+=======
 >>>>>>> parent of d99564b (Feat: get RSI function)
 =======
 >>>>>>> parent of d99564b (Feat: get RSI function)
@@ -348,6 +351,7 @@ def update():
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
             # ====== 신규 롱 진입 (닫힌 봉 기준) ======
             # 조건: 추세상승 & (최근 크로스 or 3봉 상방) & 리테스트 확인 & 과확장 아님 & 전봉 과대범위 아님 & RSI 50 상향 돌파
             rsi_cross_up_50 = (prev_rsi_map[symbol] is not None) and (prev_rsi_map[symbol] <= 50) and (RSI_CUR > 50)
@@ -380,6 +384,8 @@ def update():
 
 <<<<<<< HEAD
 =======
+=======
+>>>>>>> parent of d99564b (Feat: get RSI function)
 =======
 >>>>>>> parent of d99564b (Feat: get RSI function)
 =======
