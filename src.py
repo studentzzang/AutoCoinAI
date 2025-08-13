@@ -192,7 +192,7 @@ def update():
     
     is_first = True
 
-    INTERVAL = 5  # 5분봉
+    INTERVAL = 15 # 분봉
 
     # 상태 플래그: 포지션 진입 후 RSI 임계 통과 여부
     dipped35_after_entry = {s: False for s in SYMBOL}  # 숏용: 35 이하 찍었는가
@@ -211,6 +211,7 @@ def update():
             EMA_28 = get_EMA(symbol, interval=INTERVAL, period=28)
 
             closes3 = get_close_price(symbol, interval=INTERVAL)  # [2~3바 전, 1~2바 전, 진행중]
+            c_prev2 = closes3[0]
             c_prev1 = closes3[1]  # 가장 최근에 닫힌 캔들의 종가
             cur_3   = closes3[2]  # 진행 중 캔들(실시간)
 
@@ -224,6 +225,11 @@ def update():
             new_bar = (last_closed_map[symbol] is None) or (last_closed_map[symbol] != c_prev1)
             if new_bar:
                 last_closed_map[symbol] = c_prev1
+                
+            # == 횡보장 / 과구간 진입 방지 ==
+            if position is None and ((RSI_14<=52 and RSI_14 >= 48) or (RSI_14>=70 or RSI_14<=30)):
+              print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wait")
+              continue  
 
             # =======================
             # 포지션 보유 시: 익절 로직(사용자 지정)
@@ -233,7 +239,7 @@ def update():
                 if not dipped35_after_entry[symbol] and RSI_14 <= 35:
                     dipped35_after_entry[symbol] = True
                 # 찍은 이후, 다시 35 '초과' 시 익절
-                if (dipped35_after_entry[symbol] and RSI_14 > 35) or (c_prev1 > EMA_9 and RSI_14 >= 50):
+                if (dipped35_after_entry[symbol] and RSI_14 > 35) or (c_prev1 >= EMA_9 and RSI_14 >= 50):
                     close_position(symbol=symbol, side="Buy")  # 숏 청산
                     position = None
                     entry_price = None
@@ -246,7 +252,7 @@ def update():
                 if not peaked65_after_entry[symbol] and RSI_14 >= 65:
                     peaked65_after_entry[symbol] = True
                 # 찍은 이후, 다시 65 '미만' 시 익절 or 손해방지 손절
-                if (peaked65_after_entry[symbol] and RSI_14 < 65) or (c_prev1 < EMA_9 and RSI_14 <= 50):
+                if (peaked65_after_entry[symbol] and RSI_14 < 65) or (c_prev1 <= EMA_9 and RSI_14 <= 50):
                     close_position(symbol=symbol, side="Sell")  # 롱 청산
                     position = None
                     entry_price = None
@@ -259,7 +265,7 @@ def update():
             # =======================
             if position is None and new_bar:
                 # 숏 진입: EMA9 < EMA28 AND RSI ≤ 50
-                if (EMA_9 < EMA_28) and (RSI_14 <= 50):
+                if (EMA_9 < EMA_28 and RSI_14 <= 50) or (c_prev2<=EMA_9 and c_prev1<=EMA_9 and cur_3 <= EMA_9 and RSI_14<=50):
                     px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                     if qty > 0:
                         position = 'short'
@@ -269,7 +275,7 @@ def update():
                         peaked65_after_entry[symbol] = False
 
                 # 롱 진입: EMA9 > EMA28 AND RSI ≥ 50
-                elif (EMA_9 > EMA_28) and (RSI_14 >= 50):
+                elif (EMA_9 > EMA_28 and RSI_14 >= 53) or (c_prev2 >= EMA_9 and c_prev1 >= EMA_9 and cur_3 >=EMA_9 and RSI_14>=50):
                     px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                     if qty > 0:
                         position = 'long'
