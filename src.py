@@ -233,7 +233,7 @@ def update():
                 if not dipped35_after_entry[symbol] and RSI_14 <= 35:
                     dipped35_after_entry[symbol] = True
                 # 찍은 이후, 다시 35 '초과' 시 익절
-                if dipped35_after_entry[symbol] and RSI_14 > 35:
+                if (dipped35_after_entry[symbol] and RSI_14 > 35) or (c_prev1 > EMA_9 and RSI_14 >= 50):
                     close_position(symbol=symbol, side="Buy")  # 숏 청산
                     position = None
                     entry_price = None
@@ -245,8 +245,8 @@ def update():
                 # 먼저 65 이상을 '찍었는지' 기록
                 if not peaked65_after_entry[symbol] and RSI_14 >= 65:
                     peaked65_after_entry[symbol] = True
-                # 찍은 이후, 다시 65 '미만' 시 익절
-                if peaked65_after_entry[symbol] and RSI_14 < 65:
+                # 찍은 이후, 다시 65 '미만' 시 익절 or 손해방지 손절
+                if (peaked65_after_entry[symbol] and RSI_14 < 65) or (c_prev1 < EMA_9 and RSI_14 <= 50):
                     close_position(symbol=symbol, side="Sell")  # 롱 청산
                     position = None
                     entry_price = None
