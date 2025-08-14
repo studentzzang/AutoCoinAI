@@ -192,6 +192,7 @@ def update():
     
     is_first = True
 
+    SELL_COOLDOWN = 60 #익절, 손절 후 쿨타임
     INTERVAL = 15 # 분봉
 
     # 상태 플래그: 포지션 진입 후 RSI 임계 통과 여부
@@ -246,6 +247,7 @@ def update():
                     tp_price = None
                     dipped35_after_entry[symbol] = False
                     peaked65_after_entry[symbol] = False  # 안전 초기화
+                    time.sleep(SELL_COOLDOWN)
 
             elif position == 'long':
                 # 먼저 65 이상을 '찍었는지' 기록
@@ -259,6 +261,7 @@ def update():
                     tp_price = None
                     peaked65_after_entry[symbol] = False
                     dipped35_after_entry[symbol] = False  # 안전 초기화
+                    time.sleep(SELL_COOLDOWN)
 
             # =======================
             # 빈 포지션: 진입 (닫힌 바 기준으로만)
