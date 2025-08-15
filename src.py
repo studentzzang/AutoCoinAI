@@ -122,6 +122,14 @@ def get_close_price(symbol, interval):
     klines = resp["result"]["list"][::-1] # 0=3번째 전 1=2번째 전 2(-1)=현재 진행봉
 
     return [float(k[4]) for k in klines]
+  
+def get_BB_middle(symbol, interval, period=20):
+    kline = get_kline(symbol, interval)
+    closes = [float(k[4]) for k in kline]
+    series = pd.Series(closes)
+    mb = series.rolling(window=period, min_periods=period).mean().iloc[-1]
+    return mb
+
 
 def get_gap(ema_short, ma_long):
     return abs(ema_short - ma_long)
@@ -214,7 +222,7 @@ def update():
 
             # === 지표/가격 ===
             EMA_9  = get_EMA(symbol, interval=INTERVAL, period=9)
-            EMA_28 = get_EMA(symbol, interval=INTERVAL, period=28)
+            BB_MID = get_BB_middle(symbol, interval=INTERVAL, period=20)
 
             closes3 = get_close_price(symbol, interval=INTERVAL)  # [2~3바 전, 1~2바 전, 진행중]
             c_prev2 = closes3[0]
@@ -233,7 +241,7 @@ def update():
                 last_closed_map[symbol] = c_prev1
                 
             # == 횡보장 / 과구간 진입 방지 ==
-            if position is None and ((48 <= RSI_14 <= 52) or (RSI_14 >= 65 or RSI_14 <= 35)):
+            if position is None and ((48 <= RSI_14 <= 52) or (RSI_14 >= 70 or RSI_14 <= 30)):
                 print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wait")
                 continue
 
@@ -260,7 +268,7 @@ def update():
                     or (dipped35_after_entry[symbol] and RSI_14 > 35)
                     # 보조 안전장치(기존 유지): 단기 반등 손절 / 추세 역전 청산
                     or ((c_prev1 > EMA_9) and (RSI_14 >= 50))
-                    or (EMA_9 > EMA_28)
+                    or (EMA_9 > BB_MID)
                 ):
                     close_position(symbol=symbol, side="Buy")  # 숏 청산
                     position = None; entry_price = None; tp_price = None
@@ -292,7 +300,7 @@ def update():
                     or (peaked65_after_entry[symbol] and RSI_14 < 65)
                     # 보조 안전장치(기존 유지): 단기 약세 손절 / 추세 역전 청산
                     or ((c_prev1 < EMA_9) and (RSI_14 <= 50))
-                    or (EMA_9 < EMA_28)
+                    or (EMA_9 < BB_MID)
                 ):
                     close_position(symbol=symbol, side="Sell")  # 롱 청산
                     position = None; entry_price = None; tp_price = None
@@ -311,10 +319,9 @@ def update():
             # 숏 진입: EMA9<EMA28 + RSI 40~50 + 닫힌 두 바 연속 EMA9 아래 + EMA 간격 최소(≈0.1%)
             if position is None and new_bar:
                 if (
-                    (EMA_9 < EMA_28)
-                    and (40 <= RSI_14 <= 50)
-                    and (c_prev2 <= EMA_9 and c_prev1 <= EMA_9)
-                    and (get_gap(EMA_9, EMA_28) >= 0.001 * c_prev1)   # 약 0.1% 이상 벌어짐
+                    (EMA_9 < BB_MID  and 36 <= RSI_14 <= 50 and get_gap(EMA_9, BB_MID) >= 0.0001 * c_prev1)
+                    and (cur_3 <=EMA_9 and c_prev2 <= EMA_9 and c_prev1 <= EMA_9)
+                      # 약 0.1% 이상 벌어짐
                 ):
                     px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                     if qty > 0:
@@ -326,10 +333,9 @@ def update():
 
                 # 롱 진입: EMA9>EMA28 + RSI 50~60 + 닫힌 두 바 연속 EMA9 위 + EMA 간격 최소
                 elif (
-                    (EMA_9 > EMA_28)
-                    and (50 <= RSI_14 <= 60)
-                    and (c_prev2 >= EMA_9 and c_prev1 >= EMA_9)
-                    and (get_gap(EMA_9, EMA_28) >= 0.001 * c_prev1)
+                    (EMA_9 > BB_MID and 50 <= RSI_14 <= 64 and get_gap(EMA_9, BB_MID) >= 0.001 * c_prev1)
+                    # and (cur_3 >=EMA_9 and c_prev2 >= EMA_9 and c_prev1 >= EMA_9 and 50<=RSI_14<=64 )
+                    
                 ):
                     px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                     if qty > 0:
@@ -340,7 +346,7 @@ def update():
                         dipped35_after_entry[symbol] = False
 
 
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(28): {EMA_28:.6f} | ❣ RSI: {RSI_14}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  BB: {BB_MID:.6f} | ❣ RSI: {RSI_14}")
 
         time.sleep(10)
 
