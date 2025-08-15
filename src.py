@@ -196,8 +196,13 @@ def update():
     INTERVAL = 15 # 분봉
 
     # 상태 플래그: 포지션 진입 후 RSI 임계 통과 여부
-    dipped35_after_entry = {s: False for s in SYMBOL}  # 숏용: 35 이하 찍었는가
-    peaked65_after_entry = {s: False for s in SYMBOL}  # 롱용: 65 이상 찍었는가
+    dipped20_after_entry = {s: False for s in SYMBOL}
+    dipped27_after_entry = {s: False for s in SYMBOL}
+    dipped35_after_entry = {s: False for s in SYMBOL}
+
+    peaked65_after_entry = {s: False for s in SYMBOL}
+    peaked72_after_entry = {s: False for s in SYMBOL}
+    peaked80_after_entry = {s: False for s in SYMBOL}
 
     # 바 교체 감지용(최근 닫힌 캔들의 종가)
     last_closed_map = {s: None for s in SYMBOL}
@@ -237,30 +242,66 @@ def update():
             # =======================
             # 숏 보유 중
             if position == 'short':
-                if not dipped35_after_entry[symbol] and RSI_14 <= 35:
+            # ---- 가장 극단(20)부터 순서대로 플래그 세팅 ----
+                if RSI_14 <= 20:
+                    dipped20_after_entry[symbol] = True
+                    dipped27_after_entry[symbol] = False
+                    dipped35_after_entry[symbol] = False
+                elif RSI_14 <= 27 and not dipped20_after_entry[symbol]:
+                    dipped27_after_entry[symbol] = True
+                    dipped35_after_entry[symbol] = False
+                elif RSI_14 <= 35 and not dipped20_after_entry[symbol] and not dipped27_after_entry[symbol]:
                     dipped35_after_entry[symbol] = True
+
+                # ---- 회복 시 익절: 가장 극단(20)부터 우선 체크 ----
                 if (
-                    (dipped35_after_entry[symbol] and RSI_14 > 40)          # 과매도 되돌림 시 익절
-                    or ((c_prev1 > EMA_9) and (RSI_14 >= 50))               # 단기 반등 시 손절
-                    or (EMA_9 > EMA_28)                                     # 추세 역전(상방) 시 청산
+                    (dipped20_after_entry[symbol] and RSI_14 > 20)
+                    or (dipped27_after_entry[symbol] and RSI_14 > 27)
+                    or (dipped35_after_entry[symbol] and RSI_14 > 35)
+                    # 보조 안전장치(기존 유지): 단기 반등 손절 / 추세 역전 청산
+                    or ((c_prev1 > EMA_9) and (RSI_14 >= 50))
+                    or (EMA_9 > EMA_28)
                 ):
-                    close_position(symbol=symbol, side="Buy")
+                    close_position(symbol=symbol, side="Buy")  # 숏 청산
                     position = None; entry_price = None; tp_price = None
-                    dipped35_after_entry[symbol] = False; peaked65_after_entry[symbol] = False
+                    dipped20_after_entry[symbol] = False
+                    dipped27_after_entry[symbol] = False
+                    dipped35_after_entry[symbol] = False
+                    peaked65_after_entry[symbol] = False
+                    peaked72_after_entry[symbol] = False
+                    peaked80_after_entry[symbol] = False
                     time.sleep(SELL_COOLDOWN)
 
-            # 롱 보유 중
+                    
             elif position == 'long':
-                if not peaked65_after_entry[symbol] and RSI_14 >= 65:
+                    # ---- 가장 극단(80)부터 순서대로 플래그 세팅 ----
+                if RSI_14 >= 80:
+                    peaked80_after_entry[symbol] = True
+                    peaked72_after_entry[symbol] = False
+                    peaked65_after_entry[symbol] = False
+                elif RSI_14 >= 72 and not peaked80_after_entry[symbol]:
+                    peaked72_after_entry[symbol] = True
+                    peaked65_after_entry[symbol] = False
+                elif RSI_14 >= 65 and not peaked80_after_entry[symbol] and not peaked72_after_entry[symbol]:
                     peaked65_after_entry[symbol] = True
+
+                # ---- 되돌림 시 익절: 가장 극단(80)부터 우선 체크 ----
                 if (
-                    (peaked65_after_entry[symbol] and RSI_14 < 60)          # 과매수 되돌림 시 익절
-                    or ((c_prev1 < EMA_9) and (RSI_14 <= 50))               # 단기 약세 시 손절
-                    or (EMA_9 < EMA_28)                                     # 추세 역전(하방) 시 청산
+                    (peaked80_after_entry[symbol] and RSI_14 < 80)
+                    or (peaked72_after_entry[symbol] and RSI_14 < 72)
+                    or (peaked65_after_entry[symbol] and RSI_14 < 65)
+                    # 보조 안전장치(기존 유지): 단기 약세 손절 / 추세 역전 청산
+                    or ((c_prev1 < EMA_9) and (RSI_14 <= 50))
+                    or (EMA_9 < EMA_28)
                 ):
-                    close_position(symbol=symbol, side="Sell")
+                    close_position(symbol=symbol, side="Sell")  # 롱 청산
                     position = None; entry_price = None; tp_price = None
-                    peaked65_after_entry[symbol] = False; dipped35_after_entry[symbol] = False
+                    peaked80_after_entry[symbol] = False
+                    peaked72_after_entry[symbol] = False
+                    peaked65_after_entry[symbol] = False
+                    dipped20_after_entry[symbol] = False
+                    dipped27_after_entry[symbol] = False
+                    dipped35_after_entry[symbol] = False
                     time.sleep(SELL_COOLDOWN)
 
 
