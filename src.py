@@ -228,9 +228,9 @@ def update():
                 last_closed_map[symbol] = c_prev1
                 
             # == 횡보장 / 과구간 진입 방지 ==
-            if position is None and ((RSI_14<=52 and RSI_14 >= 48) or (RSI_14>=70 or RSI_14<=30)):
-              print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wait")
-              continue  
+            if position is None and ((48 <= RSI_14 <= 52) or (RSI_14 >= 65 or RSI_14 <= 35)):
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wait")
+                continue
 
             # =======================
             # 포지션 보유 시: 익절 로직(사용자 지정)
