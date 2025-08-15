@@ -235,40 +235,46 @@ def update():
             # =======================
             # 포지션 보유 시: 익절 로직(사용자 지정)
             # =======================
+            # 숏 보유 중
             if position == 'short':
-                # 먼저 35 이하를 '찍었는지' 기록
                 if not dipped35_after_entry[symbol] and RSI_14 <= 35:
                     dipped35_after_entry[symbol] = True
-                # 찍은 이후, 다시 35 '초과' 시 익절
-                if (dipped35_after_entry[symbol] and RSI_14 > 35) or (c_prev1 >= EMA_9 and RSI_14 >= 50):
-                    close_position(symbol=symbol, side="Buy")  # 숏 청산
-                    position = None
-                    entry_price = None
-                    tp_price = None
-                    dipped35_after_entry[symbol] = False
-                    peaked65_after_entry[symbol] = False  # 안전 초기화
+                if (
+                    (dipped35_after_entry[symbol] and RSI_14 > 40)          # 과매도 되돌림 시 익절
+                    or ((c_prev1 > EMA_9) and (RSI_14 >= 50))               # 단기 반등 시 손절
+                    or (EMA_9 > EMA_28)                                     # 추세 역전(상방) 시 청산
+                ):
+                    close_position(symbol=symbol, side="Buy")
+                    position = None; entry_price = None; tp_price = None
+                    dipped35_after_entry[symbol] = False; peaked65_after_entry[symbol] = False
                     time.sleep(SELL_COOLDOWN)
 
+            # 롱 보유 중
             elif position == 'long':
-                # 먼저 65 이상을 '찍었는지' 기록
                 if not peaked65_after_entry[symbol] and RSI_14 >= 65:
                     peaked65_after_entry[symbol] = True
-                # 찍은 이후, 다시 65 '미만' 시 익절 or 손해방지 손절
-                if (peaked65_after_entry[symbol] and RSI_14 < 65) or (c_prev1 <= EMA_9 and RSI_14 <= 50):
-                    close_position(symbol=symbol, side="Sell")  # 롱 청산
-                    position = None
-                    entry_price = None
-                    tp_price = None
-                    peaked65_after_entry[symbol] = False
-                    dipped35_after_entry[symbol] = False  # 안전 초기화
+                if (
+                    (peaked65_after_entry[symbol] and RSI_14 < 60)          # 과매수 되돌림 시 익절
+                    or ((c_prev1 < EMA_9) and (RSI_14 <= 50))               # 단기 약세 시 손절
+                    or (EMA_9 < EMA_28)                                     # 추세 역전(하방) 시 청산
+                ):
+                    close_position(symbol=symbol, side="Sell")
+                    position = None; entry_price = None; tp_price = None
+                    peaked65_after_entry[symbol] = False; dipped35_after_entry[symbol] = False
                     time.sleep(SELL_COOLDOWN)
+
 
             # =======================
             # 빈 포지션: 진입 (닫힌 바 기준으로만)
             # =======================
+            # 숏 진입: EMA9<EMA28 + RSI 40~50 + 닫힌 두 바 연속 EMA9 아래 + EMA 간격 최소(≈0.1%)
             if position is None and new_bar:
-                # 숏 진입: EMA9 < EMA28 AND RSI ≤ 50
-                if (EMA_9 < EMA_28 and RSI_14 <= 50) or (c_prev2<=EMA_9 and c_prev1<=EMA_9 and cur_3 <= EMA_9 and RSI_14<=50):
+                if (
+                    (EMA_9 < EMA_28)
+                    and (40 <= RSI_14 <= 50)
+                    and (c_prev2 <= EMA_9 and c_prev1 <= EMA_9)
+                    and (get_gap(EMA_9, EMA_28) >= 0.001 * c_prev1)   # 약 0.1% 이상 벌어짐
+                ):
                     px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                     if qty > 0:
                         position = 'short'
@@ -277,8 +283,13 @@ def update():
                         dipped35_after_entry[symbol] = False
                         peaked65_after_entry[symbol] = False
 
-                # 롱 진입: EMA9 > EMA28 AND RSI ≥ 50
-                elif (EMA_9 > EMA_28 and RSI_14 >= 53) or (c_prev2 >= EMA_9 and c_prev1 >= EMA_9 and cur_3 >=EMA_9 and RSI_14>=50):
+                # 롱 진입: EMA9>EMA28 + RSI 50~60 + 닫힌 두 바 연속 EMA9 위 + EMA 간격 최소
+                elif (
+                    (EMA_9 > EMA_28)
+                    and (50 <= RSI_14 <= 60)
+                    and (c_prev2 >= EMA_9 and c_prev1 >= EMA_9)
+                    and (get_gap(EMA_9, EMA_28) >= 0.001 * c_prev1)
+                ):
                     px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                     if qty > 0:
                         position = 'long'
@@ -286,6 +297,7 @@ def update():
                         tp_price = None
                         peaked65_after_entry[symbol] = False
                         dipped35_after_entry[symbol] = False
+
 
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  EMA(28): {EMA_28:.6f} | ❣ RSI: {RSI_14}")
 
