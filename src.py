@@ -317,7 +317,7 @@ def update():
     is_first = True
 
     SELL_COOLDOWN = 60 #익절, 손절 후 쿨타임
-    INTERVAL = 15 # 분봉
+    INTERVAL = 30 # 분봉
 
     # 상태 플래그: 포지션 진입 후 RSI 임계 통과 여부
     dipped20_after_entry = {s: False for s in SYMBOL}
