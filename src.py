@@ -1,15 +1,21 @@
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from pybit.unified_trading import HTTP
-import os
+import os, sys
 import pandas as pd
 from datetime import datetime
 import time
+import hmac, hashlib, requests, urllib.parse
 
 # ------ GET API KEY -----------------
-load_dotenv()
+load_dotenv(find_dotenv(),override=True)
 
 _api_key = os.getenv("API_KEY")
 _api_secret = os.getenv("API_KEY_SECRET")
+
+if not _api_key or not _api_secret:
+    print("❌ API_KEY 또는 API_KEY_SECRET을 .env에서 못 찾았습니다.")
+    print(f"cwd={os.getcwd()}  .env={find_dotenv() or 'NOT FOUND'}")
+    sys.exit(1)
 
 session = HTTP(
     api_key=_api_key,
@@ -17,6 +23,7 @@ session = HTTP(
     recv_window=10000,
     max_retries=0   # ❌ retry 꺼짐
 )
+
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["PUMPFUNUSDT"]
 LEVERAGE = ["2"] #  must be string
@@ -32,12 +39,40 @@ entry_price = None #포지션 진입가
 tp_price = None
 
 # ---- FUNC LINE -----
-
 def get_usdt():
-    bal = session.get_coin_balance(accountType="UNIFIED", coin="USDT")
-    usdt = float(bal["result"]["balance"]["walletBalance"])
-    
-    return usdt
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+
+    ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
+    recv = "10000"
+
+    # 서명/요청 모두에 '동일한' 정렬 쿼리스트링 사용
+    params = {"accountType": "UNIFIED", "coin": "USDT"}
+    canonical = "&".join(f"{k}={params[k]}" for k in sorted(params))  # accountType→coin
+
+    payload = ts + api_key + recv + canonical
+    sign = hmac.new(api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+    }
+
+    # 실제 요청도 같은 canonical을 그대로 사용(재정렬 방지)
+    url = f"{base}/v5/account/wallet-balance?{canonical}"
+    d = requests.get(url, headers=headers, timeout=10).json()
+
+    if d.get("retCode") != 0:
+        raise RuntimeError(f"wallet-balance {d.get('retCode')} {d.get('retMsg')} | origin[{payload}]")
+
+    coin = next(c for c in d["result"]["list"][0]["coin"] if c["coin"] == "USDT")
+    return float(coin.get("availableToWithdraw") or coin.get("totalAvailableBalance") or coin.get("walletBalance") or coin.get("equity") or 0.0)
+
+print("잔액:",get_usdt())
 
 def set_leverage(symbol, leverage):
     
@@ -56,7 +91,6 @@ def set_leverage(symbol, leverage):
         
         return
 
-import requests
 
 BYBIT_BASE = "https://api.bybit.com"  # 본계
 
