@@ -21,11 +21,12 @@ session = HTTP(
     api_key=_api_key,
     api_secret=_api_secret,
     recv_window=10000,
-    max_retries=0   # ❌ retry 꺼짐
+    max_retries=0     # ❌ retry 꺼짐
 )
 
+
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["PUMPFUNUSDT"]
+SYMBOL = ["DOGEUSDT"]
 LEVERAGE = ["2"] #  must be string
 PCT     = 40 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
@@ -134,14 +135,19 @@ def get_RSI(symbol, interval, period=14):
 
     return rsi.iloc[-1] 
 
-def get_current_price(symbol):
-    t_res = session.get_tickers(
-        category="linear",
-        symbol=symbol
-    )
-    current_price = float(t_res["result"]["list"][0]["lastPrice"])
-    
-    return current_price
+def get_current_price(symbol, timeout=10):
+    s = str(symbol).strip().upper()
+    params = {"category": "linear", "symbol": s}
+    r = requests.get(f"{BYBIT_BASE}/v5/market/tickers", params=params, timeout=timeout)
+    if r.status_code != 200:
+        raise RuntimeError(f"/v5/market/tickers HTTP {r.status_code}: {r.text}")
+    d = r.json()
+    if d.get("retCode") != 0:
+        raise RuntimeError(f"/v5/market/tickers {d.get('retCode')} {d.get('retMsg')}: {d}")
+    lst = d.get("result", {}).get("list") or []
+    if not lst:
+        raise RuntimeError(f"/v5/market/tickers empty for {s}: {d}")
+    return float(lst[0]["lastPrice"])
 
 def get_EMA(symbol, period, interval): # index 0 = EMA(9), 1 = MA(28)
     
@@ -199,6 +205,8 @@ def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     print(f"💡[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 진입 / 수량 {qty} ({side})")
     
     return cur_price, qty
+
+entry_position("DOGEUSDT",2,"Buy")
     
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
     
@@ -306,7 +314,7 @@ def update():
               # ---- 되돌림 시 청산: 20이 최우선, 아니면 30 ----
               if (
                   (dipped20_after_entry[symbol] and RSI_14 > 20)  # 20 찍고 20 회복
-                  or (dipped30_after_entry[symbol] and RSI_14 > 30)  # 30 찍고 30 회복
+                  #or (dipped30_after_entry[symbol] and RSI_14 > 30)  # 30 찍고 30 회복
                   or (EMA_9 > BB_MID)  # 보조장치: EMA9가 BB 중간선 위로 (상방 전환 시그널)
               ):
                   close_position(symbol=symbol, side="Buy")
@@ -335,7 +343,7 @@ def update():
               # ---- 되돌림 시 청산: 80이 최우선, 아니면 70 ----
               if (
                   (peaked80_after_entry[symbol] and RSI_14 < 80)  # 80 찍고 80 하회
-                  or (peaked70_after_entry[symbol] and RSI_14 < 70)  # 70 찍고 70 하회
+                  #or (peaked70_after_entry[symbol] and RSI_14 < 70)  # 70 찍고 70 하회
                   or (EMA_9 < BB_MID)  # 보조장치: EMA9가 BB 중간선 아래로 (하방 전환 시그널)
               ):
                   close_position(symbol=symbol, side="Sell")
