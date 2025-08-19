@@ -26,7 +26,7 @@ session = HTTP(
 
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["DOGEUSDT"]
+SYMBOL = ["PUMPFUNUSDT"]
 SYMBOL = [s.strip().upper() for s in SYMBOL]
 LEVERAGE = ["2"] #  must be string
 PCT     = 40 # 투자비율 n% (후에 심볼 개수 비례도 구현)
@@ -378,7 +378,7 @@ def update():
               if (
                   (dipped20_after_entry[symbol] and RSI_14 > 20)  # 20 찍고 20 회복
                   #or (dipped30_after_entry[symbol] and RSI_14 > 30)  # 30 찍고 30 회복
-                  or (EMA_9 > BB_MID)  # 보조장치: EMA9가 BB 중간선 위로 (상방 전환 시그널)
+                  or (EMA_9 > BB_MID) or (EMA_9 >= 49)  # 보조장치, 손절
               ):
                   close_position(symbol=symbol, side="Buy")
                   position = None; entry_price = None; tp_price = None
@@ -407,7 +407,7 @@ def update():
               if (
                   (peaked80_after_entry[symbol] and RSI_14 < 80)  # 80 찍고 80 하회
                   #or (peaked70_after_entry[symbol] and RSI_14 < 70)  # 70 찍고 70 하회
-                  or (EMA_9 < BB_MID)  # 보조장치: EMA9가 BB 중간선 아래로 (하방 전환 시그널)
+                  or (EMA_9 < BB_MID) or (EMA_9<=51)  # 보조장치,  손절
               ):
                   close_position(symbol=symbol, side="Sell")
                   position = None; entry_price = None; tp_price = None
