@@ -29,7 +29,7 @@ session = HTTP(
 SYMBOL = ["PUMPFUNUSDT"]
 SYMBOL = [s.strip().upper() for s in SYMBOL]
 LEVERAGE = ["2"] #  must be string
-PCT     = 40 # 투자비율 n% (후에 심볼 개수 비례도 구현)
+PCT     = 25 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
 # --- GLOBAL VARIABLE LINE ---- #
 
@@ -425,7 +425,7 @@ def update():
             if position is None and new_bar:
                 # 숏 진입
                 if (
-                    (EMA_9 < BB_MID  and 36 <= RSI_14 <= 49 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
+                    (EMA_9 < BB_MID  and 36 <= RSI_14 <= 46 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
                     and (cur_3 <= EMA_9 and c_prev1 <= EMA_9 and c_prev2<=EMA_9)
                 ):
                     px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
@@ -441,7 +441,7 @@ def update():
 
                 # 롱 진입
                 elif (
-                    (EMA_9 > BB_MID and 62 >= RSI_14 >= 51 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
+                    (EMA_9 > BB_MID and 62 >= RSI_14 >= 54 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
                     and (cur_3 >= EMA_9 and c_prev1 >= EMA_9 and c_prev2 >=EMA_9)
                 ):
                     px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
