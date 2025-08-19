@@ -18,7 +18,7 @@ session = HTTP(
     max_retries=0   # ❌ retry 꺼짐
 )
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["DOGEUSDT"]
+SYMBOL = ["PUMPFUNUSDT"]
 LEVERAGE = ["2"] #  must be string
 PCT     = 40 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
@@ -56,17 +56,31 @@ def set_leverage(symbol, leverage):
         
         return
 
+import requests
+
+BYBIT_BASE = "https://api.bybit.com"  # 본계
+
+def get_kline_http(symbol, interval, limit=200, start=None, end=None, timeout=10):
+    s = str(symbol).strip().upper()
+    iv = str(interval).upper()   # "15", "1", "D" 등
+    params = {"category":"linear", "symbol":s, "interval":iv, "limit":int(limit)}
+    if start is not None: params["start"] = int(start)
+    if end   is not None: params["end"]   = int(end)
+
+    r = requests.get(f"{BYBIT_BASE}/v5/market/kline", params=params, timeout=timeout)
+    if r.status_code != 200:
+        raise RuntimeError(f"/v5/market/kline HTTP {r.status_code}: {r.text}")
+    data = r.json()
+    if data.get("retCode") != 0:
+        raise RuntimeError(f"/v5/market/kline BYBIT {data.get('retCode')} {data.get('retMsg')}: {data}")
+    lst = data.get("result", {}).get("list") or []
+    if not lst:
+        raise RuntimeError(f"/v5/market/kline empty list: {data}")
+    return lst[::-1]  # 과거→현재 순서로
+
+# 기존 함수 대체
 def get_kline(symbol, interval):
-    
-    resp = session.get_kline(
-        category="linear",
-        symbol=str(symbol),    
-        interval=str(interval),        
-        limit=500,               
-    )
-    klines = resp["result"]["list"][::-1]
-    
-    return klines
+    return get_kline_http(symbol, interval, limit=200)
 
 def get_RSI(symbol, interval, period=14):
     kline = get_kline(symbol, interval) 
@@ -115,16 +129,10 @@ def get_position_size(symbol): #진입해있는 선물 개수
     return size
     
 def get_close_price(symbol, interval):
-    resp = session.get_kline(
-        symbol=symbol,
-        interval = str(interval),
-        limit =3, # 종료된 봉2, 현재진행봉1, 종료된 봉만 리턴
-        category = 'linear',
-    )
-    
-    klines = resp["result"]["list"][::-1] # 0=3번째 전 1=2번째 전 2(-1)=현재 진행봉
+    # requests 기반 우회 사용 (3개만 가져옴: 닫힌바2 + 진행중1)
+    klines = get_kline_http(symbol, interval, limit=3)
+    return [float(k[4]) for k in klines]  # [2~3바 전, 1~2바 전, 진행중]
 
-    return [float(k[4]) for k in klines]
   
 def get_BB_middle(symbol, interval, period=20):
     kline = get_kline(symbol, interval)
