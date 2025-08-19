@@ -11,8 +11,12 @@ load_dotenv()
 _api_key = os.getenv("API_KEY")
 _api_secret = os.getenv("API_KEY_SECRET")
 
-session = HTTP(api_key = _api_key, api_secret = _api_secret,  recv_window=10000)
-
+session = HTTP(
+    api_key=_api_key,
+    api_secret=_api_secret,
+    recv_window=10000,
+    max_retries=0   # ❌ retry 꺼짐
+)
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["DOGEUSDT"]
 LEVERAGE = ["2"] #  must be string
@@ -55,14 +59,13 @@ def set_leverage(symbol, leverage):
 def get_kline(symbol, interval):
     
     resp = session.get_kline(
-        symbol=symbol,    
+        category="linear",
+        symbol=str(symbol),    
         interval=str(interval),        
-        limit=700,           
-        category="linear",   
+        limit=500,               
     )
     klines = resp["result"]["list"][::-1]
     
-    return klines
     return klines
 
 def get_RSI(symbol, interval, period=14):
@@ -205,12 +208,11 @@ def update():
 
     # 상태 플래그: 포지션 진입 후 RSI 임계 통과 여부
     dipped20_after_entry = {s: False for s in SYMBOL}
-    dipped27_after_entry = {s: False for s in SYMBOL}
-    dipped35_after_entry = {s: False for s in SYMBOL}
+    dipped30_after_entry = {s: False for s in SYMBOL}
 
-    peaked65_after_entry = {s: False for s in SYMBOL}
-    peaked72_after_entry = {s: False for s in SYMBOL}
+    peaked70_after_entry = {s: False for s in SYMBOL}
     peaked80_after_entry = {s: False for s in SYMBOL}
+
 
     # 바 교체 감지용(최근 닫힌 캔들의 종가)
     last_closed_map = {s: None for s in SYMBOL}
@@ -248,102 +250,98 @@ def update():
             # =======================
             # 포지션 보유 시: 익절 로직(사용자 지정)
             # =======================
-            # 숏 보유 중
             if position == 'short':
-            # ---- 가장 극단(20)부터 순서대로 플래그 세팅 ----
-                if RSI_14 <= 20:
-                    dipped20_after_entry[symbol] = True
-                    dipped27_after_entry[symbol] = False
-                    dipped35_after_entry[symbol] = False
-                elif RSI_14 <= 27 and not dipped20_after_entry[symbol]:
-                    dipped27_after_entry[symbol] = True
-                    dipped35_after_entry[symbol] = False
-                elif RSI_14 <= 35 and not dipped20_after_entry[symbol] and not dipped27_after_entry[symbol]:
-                    dipped35_after_entry[symbol] = True
+              # ---- 바닥 레벨 기록: 20 우선, 아니면 30 ----
+              if RSI_14 <= 20:
+                  dipped20_after_entry[symbol] = True
+                  dipped30_after_entry[symbol] = False
+                  time.sleep(20)
+              elif RSI_14 <= 30 and not dipped20_after_entry[symbol]:
+                  dipped30_after_entry[symbol] = True
+                  time.sleep(20)
 
-                # ---- 회복 시 익절: 가장 극단(20)부터 우선 체크 ----
-                if (
-                    (dipped20_after_entry[symbol] and RSI_14 > 20)
-                    or (dipped27_after_entry[symbol] and RSI_14 > 27)
-                    or (dipped35_after_entry[symbol] and RSI_14 > 35)
-                    # 보조 안전장치(기존 유지): 단기 반등 손절 / 추세 역전 청산
-                    or ((c_prev1 > EMA_9) and (RSI_14 >= 50))
-                    or (EMA_9 > BB_MID)
-                ):
-                    close_position(symbol=symbol, side="Buy")  # 숏 청산
-                    position = None; entry_price = None; tp_price = None
-                    dipped20_after_entry[symbol] = False
-                    dipped27_after_entry[symbol] = False
-                    dipped35_after_entry[symbol] = False
-                    peaked65_after_entry[symbol] = False
-                    peaked72_after_entry[symbol] = False
-                    peaked80_after_entry[symbol] = False
-                    time.sleep(SELL_COOLDOWN)
+
+              # ---- 되돌림 시 청산: 20이 최우선, 아니면 30 ----
+              if (
+                  (dipped20_after_entry[symbol] and RSI_14 > 20)  # 20 찍고 20 회복
+                  or (dipped30_after_entry[symbol] and RSI_14 > 30)  # 30 찍고 30 회복
+                  or (EMA_9 > BB_MID)  # 보조장치: EMA9가 BB 중간선 위로 (상방 전환 시그널)
+              ):
+                  close_position(symbol=symbol, side="Buy")
+                  position = None; entry_price = None; tp_price = None
+                  dipped20_after_entry[symbol] = False
+                  dipped30_after_entry[symbol] = False
+                  peaked70_after_entry[symbol] = False
+                  peaked80_after_entry[symbol] = False
+                  time.sleep(SELL_COOLDOWN)
+
 
                     
             elif position == 'long':
-                    # ---- 가장 극단(80)부터 순서대로 플래그 세팅 ----
-                if RSI_14 >= 80:
-                    peaked80_after_entry[symbol] = True
-                    peaked72_after_entry[symbol] = False
-                    peaked65_after_entry[symbol] = False
-                elif RSI_14 >= 72 and not peaked80_after_entry[symbol]:
-                    peaked72_after_entry[symbol] = True
-                    peaked65_after_entry[symbol] = False
-                elif RSI_14 >= 65 and not peaked80_after_entry[symbol] and not peaked72_after_entry[symbol]:
-                    peaked65_after_entry[symbol] = True
+              # ---- 피크 레벨 기록: 80 우선, 아니면 70 ----
+              if RSI_14 >= 80:
+                  peaked80_after_entry[symbol] = True
+                  peaked70_after_entry[symbol] = False
+                  
+                  time.sleep(20)
+                  
+              elif RSI_14 >= 70 and not peaked80_after_entry[symbol]:
+                  peaked70_after_entry[symbol] = True
+                  
+                  time.sleep(20)
 
-                # ---- 되돌림 시 익절: 가장 극단(80)부터 우선 체크 ----
-                if (
-                    (peaked80_after_entry[symbol] and RSI_14 < 80)
-                    or (peaked72_after_entry[symbol] and RSI_14 < 72)
-                    or (peaked65_after_entry[symbol] and RSI_14 < 65)
-                    # 보조 안전장치(기존 유지): 단기 약세 손절 / 추세 역전 청산
-                    or ((c_prev1 < EMA_9) and (RSI_14 <= 50))
-                    or (EMA_9 < BB_MID)
-                ):
-                    close_position(symbol=symbol, side="Sell")  # 롱 청산
-                    position = None; entry_price = None; tp_price = None
-                    peaked80_after_entry[symbol] = False
-                    peaked72_after_entry[symbol] = False
-                    peaked65_after_entry[symbol] = False
-                    dipped20_after_entry[symbol] = False
-                    dipped27_after_entry[symbol] = False
-                    dipped35_after_entry[symbol] = False
-                    time.sleep(SELL_COOLDOWN)
+              # ---- 되돌림 시 청산: 80이 최우선, 아니면 70 ----
+              if (
+                  (peaked80_after_entry[symbol] and RSI_14 < 80)  # 80 찍고 80 하회
+                  or (peaked70_after_entry[symbol] and RSI_14 < 70)  # 70 찍고 70 하회
+                  or (EMA_9 < BB_MID)  # 보조장치: EMA9가 BB 중간선 아래로 (하방 전환 시그널)
+              ):
+                  close_position(symbol=symbol, side="Sell")
+                  position = None; entry_price = None; tp_price = None
+                  peaked80_after_entry[symbol] = False
+                  peaked70_after_entry[symbol] = False
+                  dipped20_after_entry[symbol] = False
+                  dipped30_after_entry[symbol] = False
+                  time.sleep(SELL_COOLDOWN)
+
 
 
             # =======================
             # 빈 포지션: 진입 (닫힌 바 기준으로만)
             # =======================
-            # 숏 진입: EMA9<EMA28 + RSI 40~50 + 닫힌 두 바 연속 EMA9 아래 + EMA 간격 최소(≈0.1%)
             if position is None and new_bar:
+                # 숏 진입
                 if (
-                    (EMA_9 < BB_MID  and 36 <= RSI_14 <= 50 and get_gap(EMA_9, BB_MID) >= 0.0001 * c_prev1)
-                    and (cur_3 <=EMA_9 and c_prev2 <= EMA_9 and c_prev1 <= EMA_9)
-                      # 약 0.1% 이상 벌어짐
+                    (EMA_9 < BB_MID  and 36 <= RSI_14 <= 49 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
+                    and (cur_3 <= EMA_9 and c_prev1 <= EMA_9 and c_prev2<=EMA_9)
                 ):
                     px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                     if qty > 0:
                         position = 'short'
                         entry_price = px
                         tp_price = None
-                        dipped35_after_entry[symbol] = False
-                        peaked65_after_entry[symbol] = False
+                        # 사용 중인 플래그만 초기화
+                        dipped20_after_entry[symbol] = False
+                        dipped30_after_entry[symbol] = False
+                        peaked70_after_entry[symbol] = False
+                        peaked80_after_entry[symbol] = False
 
-                # 롱 진입: EMA9>EMA28 + RSI 50~60 + 닫힌 두 바 연속 EMA9 위 + EMA 간격 최소
+                # 롱 진입
                 elif (
-                    (EMA_9 > BB_MID and 50 <= RSI_14 <= 64 and get_gap(EMA_9, BB_MID) >= 0.001 * c_prev1)
-                    # and (cur_3 >=EMA_9 and c_prev2 >= EMA_9 and c_prev1 >= EMA_9 and 50<=RSI_14<=64 )
-                    
+                    (EMA_9 > BB_MID and 62 >= RSI_14 >= 51 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
+                    and (cur_3 >= EMA_9 and c_prev1 >= EMA_9 and c_prev2 >=EMA_9)
                 ):
                     px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                     if qty > 0:
                         position = 'long'
                         entry_price = px
                         tp_price = None
-                        peaked65_after_entry[symbol] = False
-                        dipped35_after_entry[symbol] = False
+                        # 사용 중인 플래그만 초기화
+                        peaked70_after_entry[symbol] = False
+                        peaked80_after_entry[symbol] = False
+                        dipped20_after_entry[symbol] = False
+                        dipped30_after_entry[symbol] = False
+
 
 
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  BB: {BB_MID:.6f} | ❣ RSI: {RSI_14}")
