@@ -4,7 +4,7 @@ import os, sys
 import pandas as pd
 from datetime import datetime
 import time
-import hmac, hashlib, requests, urllib.parse
+import hmac, hashlib, requests, json
 
 # ------ GET API KEY -----------------
 load_dotenv(find_dotenv(),override=True)
@@ -77,20 +77,34 @@ def get_usdt():
 print("잔액:",get_usdt())
 
 def set_leverage(symbol, leverage):
-    
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+    s = str(symbol).strip().upper()
+    lev = str(leverage)
+
     try:
-        session.set_leverage(
-            category='linear',
-            symbol=symbol,
-            buy_leverage=leverage,
-            sell_leverage=leverage,
-        )
-        
-        print(f"✅ {symbol} 레버리지 설정 완료: {leverage}x")
+        ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
+        recv = "10000"
+        body = {"category":"linear","symbol":s,"buyLeverage":lev,"sellLeverage":lev}
+        payload = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+        sign = hmac.new(api_secret.encode(), (ts + api_key + recv + payload).encode(), hashlib.sha256).hexdigest()
+        headers = {
+            "X-BAPI-API-KEY": api_key,
+            "X-BAPI-TIMESTAMP": ts,
+            "X-BAPI-RECV-WINDOW": recv,
+            "X-BAPI-SIGN": sign,
+            "X-BAPI-SIGN-TYPE": "2",
+            "Content-Type": "application/json",
+        }
+        r = requests.post(base + "/v5/position/set-leverage", data=payload, headers=headers, timeout=10).json()
+        if r.get("retCode") == 0:
+            print(f"✅ {symbol} 레버리지 설정 완료: {leverage}x")
+        else:
+            print(f"📛 {symbol} 레버리지 에러-> 이미 설정이 되어있습니다.")
+            return
     except:
-        
         print(f"📛 {symbol} 레버리지 에러-> 이미 설정이 되어있습니다.")
-        
         return
 
 
@@ -116,17 +130,8 @@ def get_kline_http(symbol, interval, limit=200, start=None, end=None, timeout=10
 
 # 기존 함수 대체
 def get_kline(symbol, interval):
-    
-    resp = session.get_kline(
-        symbol=symbol,    
-        interval=str(interval),        
-        limit=700,           
-        category="linear",   
-    )
-    klines = resp["result"]["list"][::-1]
-    
-    return klines
-    return klines
+    return get_kline_http(symbol, interval)
+
 
 def get_RSI(symbol, interval, period=14):
     kline = get_kline(symbol, interval) 
@@ -173,11 +178,30 @@ def get_EMA(symbol, period, interval): # index 0 = EMA(9), 1 = MA(28)
     return ema_latest
 
 def get_position_size(symbol): #진입해있는 선물 개수
-    pos = session.get_positions(category='linear', symbol=symbol)
-    
-    size = int(pos['result']['list'][0]['size'])
-    
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+    s = str(symbol).strip().upper()
+
+    ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
+    recv = "10000"
+    params = {"category":"linear","symbol":s}
+    qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sign = hmac.new(api_secret.encode(), (ts + api_key + recv + qs).encode(), hashlib.sha256).hexdigest()
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+    }
+    d = requests.get(base + "/v5/position/list?" + qs, headers=headers, timeout=10).json()
+    lst = d.get("result", {}).get("list") or []
+    if not lst:
+        return 0
+    size = int(float(lst[0].get("size", "0")))
     return size
+
     
 def get_close_price(symbol, interval):
     # requests 기반 우회 사용 (3개만 가져옴: 닫힌바2 + 진행중1)
@@ -197,58 +221,87 @@ def get_gap(ema_short, ma_long):
     return abs(ema_short - ma_long)
 
 def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
-    
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+
     value = get_usdt() * (PCT/ 100) # 구매할 usdt어치
     cur_price = get_current_price(symbol)
-    
     qty = int((value * int(leverage)) / cur_price)
-    
-    session.place_order(
-        category='linear',
-        symbol=symbol,
-        orderType="Market",
-        qty = str(qty),
-        isLeverage=1,
-        side = side,
-        reduceOnly=False
-    )
-    
+
+    ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
+    recv = "10000"
+    body = {
+        "category":"linear",
+        "symbol":str(symbol).strip().upper(),
+        "orderType":"Market",
+        "qty":str(qty),
+        "isLeverage":1,
+        "side":side,
+        "reduceOnly":False
+    }
+    payload = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+    sign = hmac.new(api_secret.encode(), (ts + api_key + recv + payload).encode(), hashlib.sha256).hexdigest()
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+        "Content-Type": "application/json",
+    }
+    requests.post(base + "/v5/order/create", data=payload, headers=headers, timeout=10).json()
+
     print(f"💡[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 진입 / 수량 {qty} ({side})")
-    
     return cur_price, qty
+
 
     
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
-    
     global entry_price
 
     qty = get_position_size(symbol=symbol)
-    
     if qty <= 0:
         print("📍 닫을 포지션 없음")
         return
-    
+
     current_price = get_current_price(symbol)
 
-    # 수익률 계산
     if side == "Sell":  # 롱 포지션 청산
         profit_pct = ((current_price - entry_price) / entry_price) * 100
     elif side == "Buy":  # 숏 포지션 청산
         profit_pct = ((entry_price - current_price) / entry_price) * 100
     else:
         profit_pct = 0
-    
-    session.place_order(
-        category='linear',
-        symbol=symbol,
-        orderType="Market",
-        side=side,
-        reduceOnly=True,
-        isLeverage=1,
-        qty=str(qty),
-    )
-    
+
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+    ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
+    recv = "10000"
+    body = {
+        "category":"linear",
+        "symbol":str(symbol).strip().upper(),
+        "orderType":"Market",
+        "side":side,
+        "reduceOnly":True,
+        "isLeverage":1,
+        "qty":str(qty),
+    }
+    payload = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+    sign = hmac.new(api_secret.encode(), (ts + api_key + recv + payload).encode(), hashlib.sha256).hexdigest()
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+        "Content-Type": "application/json",
+    }
+    requests.post(base + "/v5/order/create", data=payload, headers=headers, timeout=10).json()
+
     print(f"📍[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 익절 / 수량 {qty} / 💹 수익률 {profit_pct:.2f}%")
+
     
 
 # ---- MAIN LOOP ---
