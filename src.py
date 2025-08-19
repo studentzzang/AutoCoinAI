@@ -27,6 +27,7 @@ session = HTTP(
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
 SYMBOL = ["DOGEUSDT"]
+SYMBOL = [s.strip().upper() for s in SYMBOL]
 LEVERAGE = ["2"] #  must be string
 PCT     = 40 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
@@ -115,7 +116,17 @@ def get_kline_http(symbol, interval, limit=200, start=None, end=None, timeout=10
 
 # 기존 함수 대체
 def get_kline(symbol, interval):
-    return get_kline_http(symbol, interval, limit=200)
+    
+    resp = session.get_kline(
+        symbol=symbol,    
+        interval=str(interval),        
+        limit=700,           
+        category="linear",   
+    )
+    klines = resp["result"]["list"][::-1]
+    
+    return klines
+    return klines
 
 def get_RSI(symbol, interval, period=14):
     kline = get_kline(symbol, interval) 
@@ -206,7 +217,6 @@ def entry_position(symbol, leverage, side): #side "Buy"=long, "Sell"=short
     
     return cur_price, qty
 
-entry_position("DOGEUSDT",2,"Buy")
     
 def close_position(symbol, side): # side "Buy"=short , "Sell"=long
     
