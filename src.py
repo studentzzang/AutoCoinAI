@@ -26,7 +26,7 @@ session = HTTP(
 
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["PUMPFUNUSDT"]
+SYMBOL = ["DOGEUSDT"]
 SYMBOL = [s.strip().upper() for s in SYMBOL]
 LEVERAGE = ["2"] #  must be string
 PCT     = 25 # 투자비율 n% (후에 심볼 개수 비례도 구현)
@@ -316,8 +316,8 @@ def update():
     
     is_first = True
 
-    SELL_COOLDOWN = 60 #익절, 손절 후 쿨타임
-    INTERVAL = 30 # 분봉
+    SELL_COOLDOWN = 120 #익절, 손절 후 쿨타임
+    INTERVAL = 5 # 분봉
 
     # 상태 플래그: 포지션 진입 후 RSI 임계 통과 여부
     dipped20_after_entry = {s: False for s in SYMBOL}
@@ -377,8 +377,8 @@ def update():
               # ---- 되돌림 시 청산: 20이 최우선, 아니면 30 ----
               if (
                   (dipped20_after_entry[symbol] and RSI_14 > 20)  # 20 찍고 20 회복
-                  #or (dipped30_after_entry[symbol] and RSI_14 > 30)  # 30 찍고 30 회복
-                  or (EMA_9 > BB_MID) or (EMA_9 >= 49)  # 보조장치, 손절
+                  or (dipped30_after_entry[symbol] and RSI_14 > 30)  # 30 찍고 30 회복
+                  or (EMA_9 > BB_MID) or ((c_prev1 > BB_MID) and (RSI_14 >= 55) and ((EMA_9 - BB_MID) >= 0.0005 * c_prev1)) # 보조장치, 손절
               ):
                   close_position(symbol=symbol, side="Buy")
                   position = None; entry_price = None; tp_price = None
@@ -406,8 +406,8 @@ def update():
               # ---- 되돌림 시 청산: 80이 최우선, 아니면 70 ----
               if (
                   (peaked80_after_entry[symbol] and RSI_14 < 80)  # 80 찍고 80 하회
-                  #or (peaked70_after_entry[symbol] and RSI_14 < 70)  # 70 찍고 70 하회
-                  or (EMA_9 < BB_MID) or (EMA_9<=51)  # 보조장치,  손절
+                  or (peaked70_after_entry[symbol] and RSI_14 < 70)  # 70 찍고 70 하회
+                  or (EMA_9 < BB_MID) or ((c_prev1 < BB_MID) and (RSI_14 <= 45) and ((BB_MID - EMA_9) >= 0.0005 * c_prev1)) # 보조장치,  손절
               ):
                   close_position(symbol=symbol, side="Sell")
                   position = None; entry_price = None; tp_price = None
@@ -425,8 +425,8 @@ def update():
             if position is None and new_bar:
                 # 숏 진입
                 if (
-                    (EMA_9 < BB_MID  and 36 <= RSI_14 <= 46 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
-                    and (cur_3 <= EMA_9 and c_prev1 <= EMA_9 and c_prev2<=EMA_9)
+                    (EMA_9 < BB_MID  and 36 <= RSI_14 <= 46 and get_gap(EMA_9, BB_MID) >= 0.001 * c_prev1)
+                    and (cur_3 <= EMA_9 and c_prev1 <= EMA_9)
                 ):
                     px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                     if qty > 0:
@@ -441,8 +441,8 @@ def update():
 
                 # 롱 진입
                 elif (
-                    (EMA_9 > BB_MID and 62 >= RSI_14 >= 54 and get_gap(EMA_9, BB_MID) >= 0.0004 * c_prev1)
-                    and (cur_3 >= EMA_9 and c_prev1 >= EMA_9 and c_prev2 >=EMA_9)
+                    (EMA_9 > BB_MID and 62 >= RSI_14 >= 54 and get_gap(EMA_9, BB_MID) >= 0.001 * c_prev1)
+                    and (cur_3 >= EMA_9 and c_prev1 >= EMA_9 )
                 ):
                     px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                     if qty > 0:
