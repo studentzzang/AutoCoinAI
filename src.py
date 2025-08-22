@@ -132,6 +132,19 @@ def get_kline_http(symbol, interval, limit=200, start=None, end=None, timeout=10
 def get_kline(symbol, interval):
     return get_kline_http(symbol, interval)
 
+def get_PnL(symbol: str):
+    res = session.get_positions(category="linear", symbol=symbol)
+    return float(res["result"]["list"][0]["closedPnl"])
+
+def get_ROE(symbol: str):
+    res = session.get_positions(category="linear", symbol=symbol)
+    pos = res["result"]["list"][0]
+
+    closed_pnl = float(pos["closedPnl"])       # 실현 손익 (USDT)
+    position_im = float(pos["positionIM"])     # 증거금 (USDT)
+
+    roe_pct = (closed_pnl / position_im * 100) if position_im > 0 else 0.0
+    return roe_pct
 
 def get_RSI(symbol, interval, period=14):
     kline = get_kline(symbol, interval) 
@@ -343,9 +356,13 @@ def update():
         for i in range(len(SYMBOL)):
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
+            
+            #Pnl, ROE
+            Pnl = get_PnL(symbol) #수익 $
+            ROE = get_ROE(symbol) #수익률 %
 
             # 가격/RSI (RSI는 현재 진행중 캔들 포함값)
-            closes3 = get_close_price(symbol, interval=INTERVAL)  # [2~3바 전, 1~2바 전, 진행중]
+            closes3 = get_close_price(symbol, interval=INTERVAL) 
             c_prev2, c_prev1, cur_3 = closes3
             RSI_12 = get_RSI(symbol, interval=INTERVAL, period=RSI_PERIOD)
 
@@ -494,7 +511,7 @@ def update():
                             last_peak_level = None
 
             # 출력(형식 유지, EMA 표기 제거)
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} | ❣ RSI: {RSI_12}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙{symbol} 💲현재가: {cur_3:.5f}$  🚩포지션 {position} | ❣ RSI: {RSI_12:.2f} | 💎Pnl: {Pnl:.3f} ⚜️ROE: {ROE:.2f}")
 
         time.sleep(10)
 
