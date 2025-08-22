@@ -312,154 +312,195 @@ def start():
 
 
 def update():
-    global position, entry_price, tp_price  # tp_price는 건드리지 않지만 전역은 유지
-    
+    global position, entry_price, tp_price
+
+    INTERVAL = 1        # 1 or 3 권장 (분봉)
+    RSI_PERIOD = 12
+    COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 봉 수
+
+    # 바 교체 감지
+    last_closed = None
+    cooldown = 0
+
+    # 시작 시 극단 구간이면 첫 신호 패스
     is_first = True
 
-    SELL_COOLDOWN = 20 #익절, 손절 후 쿨타임
-    INTERVAL = 30 # 분봉
+    # 최근 찍은 과매수/과매도 레벨(숫자 하나로 관리)
+    last_peak_level = None   # 70/75/80/85 중 가장 높은 값
+    last_trough_level = None # 30/25/20/15 중 가장 낮은 값
 
-    # 상태 플래그: 포지션 진입 후 RSI 임계 통과 여부
-    dipped20_after_entry = {s: False for s in SYMBOL}
-    dipped30_after_entry = {s: False for s in SYMBOL}
+    # 포지션 보유 중 반대편 레벨(숏이면 바닥, 롱이면 천장)
+    pending_floor_level = None   # 숏 보유 시: 30/25/20/15 중 최저
+    pending_ceiling_level = None # 롱  보유 시: 70/75/80/85 중 최고
 
-    peaked70_after_entry = {s: False for s in SYMBOL}
-    peaked80_after_entry = {s: False for s in SYMBOL}
+    # 레벨 판정 보조 플래그(요청 스타일 유지: dipped/peaked 식)
+    peaked70_after_entry = False
+    peaked75_after_entry = False
+    peaked80_after_entry = False
+    peaked85_after_entry = False
 
-
-    # 바 교체 감지용(최근 닫힌 캔들의 종가)
-    last_closed_map = {s: None for s in SYMBOL}
+    dipped30_after_entry = False
+    dipped25_after_entry = False
+    dipped20_after_entry = False
+    dipped15_after_entry = False
 
     while True:
         for i in range(len(SYMBOL)):
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
 
-            # === 지표/가격 ===
-            EMA_9  = get_EMA(symbol, interval=INTERVAL, period=9)
-            BB_MID = get_BB_middle(symbol, interval=INTERVAL, period=20)
-
             closes3 = get_close_price(symbol, interval=INTERVAL)  # [2~3바 전, 1~2바 전, 진행중]
-            c_prev2 = closes3[0]
-            c_prev1 = closes3[1]  # 가장 최근에 닫힌 캔들의 종가
-            cur_3   = closes3[2]  # 진행 중 캔들(실시간)
+            c_prev2, c_prev1, cur_3 = closes3
+            RSI_12 = get_RSI(symbol, interval=INTERVAL, period=RSI_PERIOD)
 
-            RSI_14 = get_RSI(symbol, interval=INTERVAL, period=14)
-            
-            if (RSI_14 >= 65 or RSI_14 <=35) and is_first:
-                is_first=False
+            # 시작 가드
+            if is_first and (RSI_12 >= 65 or RSI_12 <= 35):
+                is_first = False
                 continue
+            is_first = False
 
-            # === 바 교체 감지 ===
-            new_bar = (last_closed_map[symbol] is None) or (last_closed_map[symbol] != c_prev1)
+            # 바 교체
+            new_bar = (last_closed is None) or (last_closed != c_prev1)
             if new_bar:
-                last_closed_map[symbol] = c_prev1
-                
-            # == 횡보장 / 과구간 진입 방지 ==
-            if position is None and ((48 <= RSI_14 <= 52) or (RSI_14 >= 70 or RSI_14 <= 30)):
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Wait")
-                continue
+                last_closed = c_prev1
+                if cooldown > 0:
+                    cooldown -= 1
 
-            # =======================
-            # 포지션 보유 시: 익절 로직(사용자 지정)
-            # =======================
-            if position == 'short':
-              # ---- 바닥 레벨 기록: 20 우선, 아니면 30 ----
-              if RSI_14 <= 20:
-                  dipped20_after_entry[symbol] = True
-                  dipped30_after_entry[symbol] = False
-                  time.sleep(20)
-              elif RSI_14 <= 30 and not dipped20_after_entry[symbol]:
-                  dipped30_after_entry[symbol] = True
-                  time.sleep(20)
+            # ===== 레벨 기록(무조건 갱신: 나중에 트리거에 사용) =====
+            # 과매수 
+            if RSI_12 >= 85:
+                last_peak_level = 85
+            elif RSI_12 >= 80:
+                last_peak_level = 85 if last_peak_level == 85 else 80 if (last_peak_level is None or last_peak_level < 80) else last_peak_level
+            elif RSI_12 >= 75:
+                if last_peak_level is None or last_peak_level < 75:
+                    last_peak_level = 75
+            elif RSI_12 >= 70:
+                if last_peak_level is None or last_peak_level < 70:
+                    last_peak_level = 70
 
+            # 과매도 
+            if RSI_12 <= 15:
+                last_trough_level = 15
+            elif RSI_12 <= 20:
+                last_trough_level = 15 if last_trough_level == 15 else 20 if (last_trrough_level := last_trough_level) is None or last_trough_level > 20 else last_trough_level
+            elif RSI_12 <= 25:
+                if last_trough_level is None or last_trough_level > 25:
+                    last_trough_level = 25
+            elif RSI_12 <= 30:
+                if last_trough_level is None or last_trough_level > 30:
+                    last_trough_level = 30
 
-              # ---- 되돌림 시 청산: 20이 최우선, 아니면 30 ----
-              if (
-                  (dipped20_after_entry[symbol] and RSI_14 > 20)  # 20 찍고 20 회복
-                  or (dipped30_after_entry[symbol] and RSI_14 > 30)  # 30 찍고 30 회복
-                  or (EMA_9 > BB_MID) or ((c_prev1 > EMA_9) and (RSI_14 >= 62) and ((EMA_9 - BB_MID) <= 0.0002 * c_prev1)) # 보조장치, 손절
-              ):
-                  close_position(symbol=symbol, side="Buy")
-                  position = None; entry_price = None; tp_price = None
-                  dipped20_after_entry[symbol] = False
-                  dipped30_after_entry[symbol] = False
-                  peaked70_after_entry[symbol] = False
-                  peaked80_after_entry[symbol] = False
-                  time.sleep(SELL_COOLDOWN)
+            # ===== 무포지션: 되돌림 진입 =====
+            if position is None and new_bar and cooldown == 0:
+                # 숏 진입: (최근 과매수 레벨 - 3) 이하로 하락
+                if last_peak_level is not None:
+                    short_trigger = last_peak_level - 3
+                    if RSI_12 <= short_trigger:
+                        px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
+                        if qty > 0:
+                            position = 'short'
+                            entry_price = px
+                            tp_price = None
+                            cooldown = COOLDOWN_BARS
+                            # 보유 중 바닥 기록 초기화
+                            pending_floor_level = None
+                            dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
+                            # 사용한 과매수 레벨 초기화
+                            last_peak_level = None
+                            # 천장 플래그 초기화
+                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
 
+                # 롱 진입: (최근 과매도 레벨 + 3) 이상으로 상승
+                if position is None and last_trough_level is not None and new_bar and cooldown == 0:
+                    long_trigger = last_trough_level + 3
+                    if RSI_12 >= long_trigger:
+                        px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                        if qty > 0:
+                            position = 'long'
+                            entry_price = px
+                            tp_price = None
+                            cooldown = COOLDOWN_BARS
+                            # 보유 중 천장 기록 초기화
+                            pending_ceiling_level = None
+                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
+                            # 사용한 과매도 레벨 초기화
+                            last_trough_level = None
+                            # 바닥 플래그 초기화
+                            dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
 
-                    
-            elif position == 'long':
-              # ---- 피크 레벨 기록: 80 우선, 아니면 70 ----
-              if RSI_14 >= 80:
-                  peaked80_after_entry[symbol] = True
-                  peaked70_after_entry[symbol] = False
-                  
-                  time.sleep(20)
-                  
-              elif RSI_14 >= 70 and not peaked80_after_entry[symbol]:
-                  peaked70_after_entry[symbol] = True
-                  
-                  time.sleep(20)
+            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산(+스위칭) =====
+            elif position == 'short' and new_bar:
+                if RSI_12 <= 30:
+                    dipped30_after_entry = True
+                    pending_floor_level = 30 if pending_floor_level is None else min(pending_floor_level, 30)
+                if RSI_12 <= 25:
+                    dipped25_after_entry = True
+                    pending_floor_level = 25 if pending_floor_level is None else min(pending_floor_level, 25)
+                if RSI_12 <= 20:
+                    dipped20_after_entry = True
+                    pending_floor_level = 20 if pending_floor_level is None else min(pending_floor_level, 20)
+                if RSI_12 <= 15:
+                    dipped15_after_entry = True
+                    pending_floor_level = 15 if pending_floor_level is None else min(pending_floor_level, 15)
 
-              # ---- 되돌림 시 청산: 80이 최우선, 아니면 70 ----
-              if (
-                  (peaked80_after_entry[symbol] and RSI_14 < 80)  # 80 찍고 80 하회
-                  or (peaked70_after_entry[symbol] and RSI_14 < 70)  # 70 찍고 70 하회
-                  or (EMA_9 < BB_MID) or ((c_prev1 < EMA_9) and (RSI_14 <= 42) and ((BB_MID - EMA_9) <= 0.0002 * c_prev1)) # 보조장치,  손절
-              ):
-                  close_position(symbol=symbol, side="Sell")
-                  position = None; entry_price = None; tp_price = None
-                  peaked80_after_entry[symbol] = False
-                  peaked70_after_entry[symbol] = False
-                  dipped20_after_entry[symbol] = False
-                  dipped30_after_entry[symbol] = False
-                  time.sleep(SELL_COOLDOWN)
+                if pending_floor_level is not None:
+                    trigger_up = pending_floor_level + 3
+                    if RSI_12 >= trigger_up:
+                        close_position(symbol=symbol, side="Buy")
+                        position = None; entry_price = None; tp_price = None
+                        cooldown = COOLDOWN_BARS
+                        # 즉시 롱 스위칭 
+                        px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                        if qty > 0:
+                            position = 'long'
+                            entry_price = px
+                            tp_price = None
+                            cooldown = COOLDOWN_BARS
+                            # 리셋
+                            pending_floor_level = None
+                            dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
+                            last_trough_level = None  
+                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
 
+            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+스위칭) =====
+            elif position == 'long' and new_bar:
+                if RSI_12 >= 70:
+                    peaked70_after_entry = True
+                    pending_ceiling_level = 70 if pending_ceiling_level is None else max(pending_ceiling_level, 70)
+                if RSI_12 >= 75:
+                    peaked75_after_entry = True
+                    pending_ceiling_level = 75 if pending_ceiling_level is None else max(pending_ceiling_level, 75)
+                if RSI_12 >= 80:
+                    peaked80_after_entry = True
+                    pending_ceiling_level = 80 if pending_ceiling_level is None else max(pending_ceiling_level, 80)
+                if RSI_12 >= 85:
+                    peaked85_after_entry = True
+                    pending_ceiling_level = 85 if pending_ceiling_level is None else max(pending_ceiling_level, 85)
 
+                if pending_ceiling_level is not None:
+                    trigger_down = pending_ceiling_level - 3
+                    if RSI_12 <= trigger_down:
+                        close_position(symbol=symbol, side="Sell")
+                        position = None; entry_price = None; tp_price = None
+                        cooldown = COOLDOWN_BARS
+                        # 즉시 숏 스위칭
+                        px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
+                        if qty > 0:
+                            position = 'short'
+                            entry_price = px
+                            tp_price = None
+                            cooldown = COOLDOWN_BARS
+                            # 리셋
+                            pending_ceiling_level = None
+                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
+                            last_peak_level = None 
+                            dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
 
-            # =======================
-            # 빈 포지션: 진입 (닫힌 바 기준으로만)
-            # =======================
-            if position is None and new_bar:
-                # 숏 진입
-                if (
-                    (EMA_9 < BB_MID  and 37 <= RSI_14 <= 49 and get_gap(EMA_9, BB_MID) >= 0.0002 * c_prev1)
-                    and (cur_3 <= EMA_9)
-                ):
-                    px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
-                    if qty > 0:
-                        position = 'short'
-                        entry_price = px
-                        tp_price = None
-                        # 사용 중인 플래그만 초기화
-                        dipped20_after_entry[symbol] = False
-                        dipped30_after_entry[symbol] = False
-                        peaked70_after_entry[symbol] = False
-                        peaked80_after_entry[symbol] = False
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} | ❣ RSI: {RSI_12}")
 
-                # 롱 진입
-                elif (
-                    (EMA_9 > BB_MID and 62 >= RSI_14 >= 51 and get_gap(EMA_9, BB_MID) >= 0.0002 * c_prev1)
-                    and (cur_3 >= EMA_9 )
-                ):
-                    px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                    if qty > 0:
-                        position = 'long'
-                        entry_price = px
-                        tp_price = None
-                        # 사용 중인 플래그만 초기화
-                        peaked70_after_entry[symbol] = False
-                        peaked80_after_entry[symbol] = False
-                        dipped20_after_entry[symbol] = False
-                        dipped30_after_entry[symbol] = False
+        time.sleep(10)
 
-
-
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} /  📶 EMA(9): {EMA_9:.6f}  BB: {BB_MID:.6f} | ❣ RSI: {RSI_14}")
-
-        time.sleep(20)
 
 
 start()
