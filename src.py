@@ -314,41 +314,37 @@ def start():
 def update():
     global position, entry_price, tp_price
 
-    INTERVAL = 1        # 1 or 3 권장 (분봉)
+    INTERVAL = 1        # 1 또는 3 권장
     RSI_PERIOD = 12
-    COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 봉 수
+    COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
 
-    # 바 교체 감지
+    # 봉 교체 감지/쿨다운(봉 단위)
     last_closed = None
     cooldown = 0
 
-    # 시작 시 극단 구간이면 첫 신호 패스
+    # 시작 시 극단구간이면 첫 신호 패스
     is_first = True
 
-    # 최근 찍은 과매수/과매도 레벨(숫자 하나로 관리)
-    last_peak_level = None   # 70/75/80/85 중 가장 높은 값
-    last_trough_level = None # 30/25/20/15 중 가장 낮은 값
+    # 최근 찍은 과매수/과매도 레벨
+    last_peak_level = None    # 70/75/80/85 중 '가장 높은' 값
+    last_trough_level = None  # 30/25/20/15 중 '가장 낮은' 값
 
-    # 포지션 보유 중 반대편 레벨(숏이면 바닥, 롱이면 천장)
-    pending_floor_level = None   # 숏 보유 시: 30/25/20/15 중 최저
-    pending_ceiling_level = None # 롱  보유 시: 70/75/80/85 중 최고
+    # 포지션 보유 중 반대편 레벨 기록
+    pending_floor_level = None    # 숏 보유 시: 최저(15/20/25/30)
+    pending_ceiling_level = None  # 롱  보유 시: 최고(70/75/80/85)
 
-    # 레벨 판정 보조 플래그(요청 스타일 유지: dipped/peaked 식)
-    peaked70_after_entry = False
-    peaked75_after_entry = False
-    peaked80_after_entry = False
-    peaked85_after_entry = False
-
-    dipped30_after_entry = False
-    dipped25_after_entry = False
-    dipped20_after_entry = False
-    dipped15_after_entry = False
+    # 플래그(요청 스타일)
+    peaked70_after_entry = peaked75_after_entry = False
+    peaked80_after_entry = peaked85_after_entry = False
+    dipped30_after_entry = dipped25_after_entry = False
+    dipped20_after_entry = dipped15_after_entry = False
 
     while True:
         for i in range(len(SYMBOL)):
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
 
+            # 가격/RSI (RSI는 현재 진행중 캔들 포함값)
             closes3 = get_close_price(symbol, interval=INTERVAL)  # [2~3바 전, 1~2바 전, 진행중]
             c_prev2, c_prev1, cur_3 = closes3
             RSI_12 = get_RSI(symbol, interval=INTERVAL, period=RSI_PERIOD)
@@ -359,19 +355,19 @@ def update():
                 continue
             is_first = False
 
-            # 바 교체
+            # 봉 교체 감지 (쿨다운 감소만 봉 기준으로)
             new_bar = (last_closed is None) or (last_closed != c_prev1)
             if new_bar:
                 last_closed = c_prev1
                 if cooldown > 0:
                     cooldown -= 1
 
-            # ===== 레벨 기록(무조건 갱신: 나중에 트리거에 사용) =====
-            # 과매수 
+            # ===== 레벨 갱신 (intra-bar 포함, 즉시 반영) =====
+            # 과매수 측: 최근에 찍은 '최상위' 레벨 유지
             if RSI_12 >= 85:
                 last_peak_level = 85
             elif RSI_12 >= 80:
-                last_peak_level = 85 if last_peak_level == 85 else 80 if (last_peak_level is None or last_peak_level < 80) else last_peak_level
+                last_peak_level = 85 if last_peak_level == 85 else (80 if (last_peak_level is None or last_peak_level < 80) else last_peak_level)
             elif RSI_12 >= 75:
                 if last_peak_level is None or last_peak_level < 75:
                     last_peak_level = 75
@@ -379,21 +375,22 @@ def update():
                 if last_peak_level is None or last_peak_level < 70:
                     last_peak_level = 70
 
-            # 과매도 
+            # 과매도 측: 최근에 찍은 '최하위' 레벨 유지
             if RSI_12 <= 15:
                 last_trough_level = 15
             elif RSI_12 <= 20:
-                last_trough_level = 15 if last_trough_level == 15 else 20 if (last_trrough_level := last_trough_level) is None or last_trough_level > 20 else last_trough_level
+                if (last_trough_level is None) or (last_trough_level > 20):
+                    last_trough_level = 20
             elif RSI_12 <= 25:
-                if last_trough_level is None or last_trough_level > 25:
+                if (last_trough_level is None) or (last_trough_level > 25):
                     last_trough_level = 25
             elif RSI_12 <= 30:
-                if last_trough_level is None or last_trough_level > 30:
+                if (last_trough_level is None) or (last_trough_level > 30):
                     last_trough_level = 30
 
-            # ===== 무포지션: 되돌림 진입 =====
-            if position is None and new_bar and cooldown == 0:
-                # 숏 진입: (최근 과매수 레벨 - 3) 이하로 하락
+            # ===== 무포지션: '봉 마감 기다리지 않고' 즉시 진입 =====
+            if position is None and cooldown == 0:
+                # 숏: (최근 과매수 레벨 - 3) 이하로 내려오면 즉시
                 if last_peak_level is not None:
                     short_trigger = last_peak_level - 3
                     if RSI_12 <= short_trigger:
@@ -403,16 +400,16 @@ def update():
                             entry_price = px
                             tp_price = None
                             cooldown = COOLDOWN_BARS
-                            # 보유 중 바닥 기록 초기화
                             pending_floor_level = None
                             dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
-                            # 사용한 과매수 레벨 초기화
+                            # 사용한 피크 레벨 리셋
                             last_peak_level = None
-                            # 천장 플래그 초기화
-                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
+                            # 천장 플래그 리셋
+                            peaked70_after_entry = peaked75_after_entry = False
+                            peaked80_after_entry = peaked85_after_entry = False
 
-                # 롱 진입: (최근 과매도 레벨 + 3) 이상으로 상승
-                if position is None and last_trough_level is not None and new_bar and cooldown == 0:
+                # 롱: (최근 과매도 레벨 + 3) 이상으로 올라오면 즉시
+                if position is None and last_trough_level is not None and cooldown == 0:
                     long_trigger = last_trough_level + 3
                     if RSI_12 >= long_trigger:
                         px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
@@ -421,16 +418,17 @@ def update():
                             entry_price = px
                             tp_price = None
                             cooldown = COOLDOWN_BARS
-                            # 보유 중 천장 기록 초기화
                             pending_ceiling_level = None
-                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
-                            # 사용한 과매도 레벨 초기화
+                            peaked70_after_entry = peaked75_after_entry = False
+                            peaked80_after_entry = peaked85_after_entry = False
+                            # 사용한 바닥 레벨 리셋
                             last_trough_level = None
-                            # 바닥 플래그 초기화
+                            # 바닥 플래그 리셋
                             dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
 
-            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산(+스위칭) =====
-            elif position == 'short' and new_bar:
+            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산(+즉시 롱 전환) =====
+            elif position == 'short':
+                # 최저 레벨 기록(intra-bar)
                 if RSI_12 <= 30:
                     dipped30_after_entry = True
                     pending_floor_level = 30 if pending_floor_level is None else min(pending_floor_level, 30)
@@ -450,21 +448,20 @@ def update():
                         close_position(symbol=symbol, side="Buy")
                         position = None; entry_price = None; tp_price = None
                         cooldown = COOLDOWN_BARS
-                        # 즉시 롱 스위칭 
+                        # 즉시 롱 스위칭 (원치 않으면 아래 4줄 주석)
                         px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                         if qty > 0:
                             position = 'long'
                             entry_price = px
                             tp_price = None
                             cooldown = COOLDOWN_BARS
-                            # 리셋
                             pending_floor_level = None
                             dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
-                            last_trough_level = None  
-                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
+                            last_trough_level = None
 
-            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+스위칭) =====
-            elif position == 'long' and new_bar:
+            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+즉시 숏 전환) =====
+            elif position == 'long':
+                # 최고 레벨 기록(intra-bar)
                 if RSI_12 >= 70:
                     peaked70_after_entry = True
                     pending_ceiling_level = 70 if pending_ceiling_level is None else max(pending_ceiling_level, 70)
@@ -484,22 +481,23 @@ def update():
                         close_position(symbol=symbol, side="Sell")
                         position = None; entry_price = None; tp_price = None
                         cooldown = COOLDOWN_BARS
-                        # 즉시 숏 스위칭
+                        # 즉시 숏 스위칭 (원치 않으면 아래 4줄 주석)
                         px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                         if qty > 0:
                             position = 'short'
                             entry_price = px
                             tp_price = None
                             cooldown = COOLDOWN_BARS
-                            # 리셋
                             pending_ceiling_level = None
-                            peaked70_after_entry = peaked75_after_entry = peaked80_after_entry = peaked85_after_entry = False
-                            last_peak_level = None 
-                            dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
+                            peaked70_after_entry = peaked75_after_entry = False
+                            peaked80_after_entry = peaked85_after_entry = False
+                            last_peak_level = None
 
+            # 출력(형식 유지, EMA 표기 제거)
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙 {symbol} 💲 현재가: {cur_3}$  🚩 포지션 {position} | ❣ RSI: {RSI_12}")
 
         time.sleep(10)
+
 
 
 
