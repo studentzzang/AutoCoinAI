@@ -328,6 +328,9 @@ def update():
     global position, entry_price, tp_price
 
     INTERVAL = 1        # 1 또는 3 권장
+    LONG_SWITCH_RSI = 28   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
+    SHORT_SWITCH_RSI = 72  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
+
     RSI_PERIOD = 12
     COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
 
@@ -459,22 +462,24 @@ def update():
                     dipped15_after_entry = True
                     pending_floor_level = 15 if pending_floor_level is None else min(pending_floor_level, 15)
 
-                if pending_floor_level is not None:
-                    trigger_up = pending_floor_level + 3
-                    if RSI_12 >= trigger_up:
-                        close_position(symbol=symbol, side="Buy")
-                        position = None; entry_price = None; tp_price = None
-                        cooldown = COOLDOWN_BARS
-                        # 즉시 롱 스위칭 (원치 않으면 아래 4줄 주석)
-                        px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                        if qty > 0:
-                            position = 'long'
-                            entry_price = px
-                            tp_price = None
+                    if pending_floor_level is not None:
+                        trigger_up = pending_floor_level + 3
+                        if RSI_12 >= trigger_up:
+                            close_position(symbol=symbol, side="Buy")
+                            position = None; entry_price = None; tp_price = None
                             cooldown = COOLDOWN_BARS
-                            pending_floor_level = None
-                            dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
-                            last_trough_level = None
+
+                            # ✅ 스위칭 조건 추가
+                            if RSI_12 <= LONG_SWITCH_RSI:
+                                px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                                if qty > 0:
+                                    position = 'long'
+                                    entry_price = px
+                                    tp_price = None
+                                    cooldown = COOLDOWN_BARS
+                                    pending_floor_level = None
+                                    dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
+                                    last_trough_level = None
 
             # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+즉시 숏 전환) =====
             elif position == 'long':
@@ -498,17 +503,19 @@ def update():
                         close_position(symbol=symbol, side="Sell")
                         position = None; entry_price = None; tp_price = None
                         cooldown = COOLDOWN_BARS
-                        # 즉시 숏 스위칭 (원치 않으면 아래 4줄 주석)
-                        px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
-                        if qty > 0:
-                            position = 'short'
-                            entry_price = px
-                            tp_price = None
-                            cooldown = COOLDOWN_BARS
-                            pending_ceiling_level = None
-                            peaked70_after_entry = peaked75_after_entry = False
-                            peaked80_after_entry = peaked85_after_entry = False
-                            last_peak_level = None
+
+                        # ✅ 스위칭 조건 추가
+                        if RSI_12 >= SHORT_SWITCH_RSI:
+                            px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
+                            if qty > 0:
+                                position = 'short'
+                                entry_price = px
+                                tp_price = None
+                                cooldown = COOLDOWN_BARS
+                                pending_ceiling_level = None
+                                peaked70_after_entry = peaked75_after_entry = False
+                                peaked80_after_entry = peaked85_after_entry = False
+                                last_peak_level = None
 
             # 출력(형식 유지, EMA 표기 제거)
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙{symbol} 💲현재가: {cur_3:.5f}$  🚩포지션 {position} | ❣ RSI: {RSI_12:.2f} | 💎Pnl: {Pnl:.3f} ⚜️ROE: {ROE:.2f}")
