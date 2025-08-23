@@ -26,17 +26,10 @@ session = HTTP(
 
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["PENGUUSDT"]
+SYMBOL = ["DOGEUSDT"]
 SYMBOL = [s.strip().upper() for s in SYMBOL]
-LEVERAGE = ["3"] #  must be string
+LEVERAGE = ["2"] #  must be string
 PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
-
-INTERVAL = 1        # 1 또는 3 권장
-LONG_SWITCH_RSI = 28   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
-SHORT_SWITCH_RSI = 72  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
-
-RSI_PERIOD = 12
-COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
 
 # --- GLOBAL VARIABLE LINE ---- #
 
@@ -334,7 +327,12 @@ def start():
 def update():
     global position, entry_price, tp_price
 
-    
+    INTERVAL = 1        # 1 또는 3 권장
+    LONG_SWITCH_RSI = 28   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
+    SHORT_SWITCH_RSI = 72  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
+
+    RSI_PERIOD = 12
+    COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
 
     # 봉 교체 감지/쿨다운(봉 단위)
     last_closed = None
