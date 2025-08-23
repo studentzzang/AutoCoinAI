@@ -140,9 +140,8 @@ def get_kline(symbol, interval):
     return get_kline_http(symbol, interval)
 
 def get_PnL(symbol: str):
-    r = session.get_positions(category="linear", symbol=symbol)
-    lst = r.get("result", {}).get("list", [])
-    return float(lst[0].get("unrealisedPnl", 0.0)) if lst else 0.0
+    res = session.get_positions(category="linear", symbol=symbol)
+    return float(res["result"]["list"][0]["closedPnl"])
 
 def get_ROE(symbol: str):
     res = session.get_positions(category="linear", symbol=symbol)
@@ -467,7 +466,7 @@ def update():
 
                     if pending_floor_level is not None:
                         trigger_up = pending_floor_level + 3
-                        if RSI_12 >= trigger_up and Pnl>0:
+                        if RSI_12 >= trigger_up:
                             close_position(symbol=symbol, side="Buy")
                             position = None; entry_price = None; tp_price = None
                             cooldown = COOLDOWN_BARS
@@ -502,7 +501,7 @@ def update():
 
                 if pending_ceiling_level is not None:
                     trigger_down = pending_ceiling_level - 3
-                    if RSI_12 <= trigger_down and Pnl>0:
+                    if RSI_12 <= trigger_down:
                         close_position(symbol=symbol, side="Sell")
                         position = None; entry_price = None; tp_price = None
                         cooldown = COOLDOWN_BARS
