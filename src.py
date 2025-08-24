@@ -31,6 +31,13 @@ SYMBOL = [s.strip().upper() for s in SYMBOL]
 LEVERAGE = ["2"] #  must be string
 PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
+INTERVAL = 5        # 1 또는 3 권장
+LONG_SWITCH_RSI = 30   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
+SHORT_SWITCH_RSI = 70  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
+
+RSI_PERIOD = 12
+COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
+
 # --- GLOBAL VARIABLE LINE ---- #
 
 init_regime = None   # "golden" 또는 "dead"
@@ -133,18 +140,84 @@ def get_kline(symbol, interval):
     return get_kline_http(symbol, interval)
 
 def get_PnL(symbol: str):
-    res = session.get_positions(category="linear", symbol=symbol)
-    return float(res["result"]["list"][0]["closedPnl"])
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+    s = str(symbol).strip().upper()
+
+    # 서버 시간 → timestamp
+    ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
+    recv = "10000"
+
+    # 쿼리 스트링 (category=linear&symbol=...)
+    params = {"category": "linear", "symbol": s}
+    qs = "&".join(f"{k}={params[k]}" for k in sorted(params))  # category 먼저, 그다음 symbol
+
+    # 서명 (timestamp + api_key + recv_window + queryString)
+    payload = ts + api_key + recv + qs
+    sign = hmac.new(api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+    }
+
+    url = f"{base}/v5/position/list?{qs}"
+    d = requests.get(url, headers=headers, timeout=10).json()
+
+    if d.get("retCode") != 0:
+        raise RuntimeError(f"position/list {d.get('retCode')} {d.get('retMsg')} | {d}")
+
+    lst = d.get("result", {}).get("list") or []
+    if not lst:
+        return 0.0
+
+    return float(lst[0].get("unrealisedPnl", 0.0) or 0.0)
 
 def get_ROE(symbol: str):
-    res = session.get_positions(category="linear", symbol=symbol)
-    pos = res["result"]["list"][0]
+    # 먼저 포지션 조회 (requests 기반)
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+    s = str(symbol).strip().upper()
 
-    closed_pnl = float(pos["closedPnl"])       # 실현 손익 (USDT)
-    position_im = float(pos["positionIM"])     # 증거금 (USDT)
+    ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
+    recv = "10000"
+    params = {"category": "linear", "symbol": s}
+    qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sign = hmac.new(api_secret.encode(), (ts + api_key + recv + qs).encode(), hashlib.sha256).hexdigest()
 
-    roe_pct = (closed_pnl / position_im * 100) if position_im > 0 else 0.0
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+    }
+
+    url = f"{base}/v5/position/list?{qs}"
+    d = requests.get(url, headers=headers, timeout=10).json()
+    if d.get("retCode") != 0:
+        raise RuntimeError(f"position/list {d.get('retCode')} {d.get('retMsg')} | {d}")
+
+    lst = d.get("result", {}).get("list") or []
+    if not lst:
+        return 0.0
+
+    pos = lst[0]
+
+    # PnL은 기존 함수 호출
+    unrealised_pnl = get_PnL(symbol)
+
+    # IM(Initial Margin) 가져오기
+    position_im = float(pos.get("positionIM", 0.0))
+
+    roe_pct = (unrealised_pnl / position_im * 100) if position_im > 0 else 0.0
     return roe_pct
+
 
 def get_RSI(symbol, interval, period=14):
     kline = get_kline(symbol, interval) 
@@ -326,13 +399,6 @@ def start():
 
 def update():
     global position, entry_price, tp_price
-
-    INTERVAL = 1        # 1 또는 3 권장
-    LONG_SWITCH_RSI = 28   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
-    SHORT_SWITCH_RSI = 72  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
-
-    RSI_PERIOD = 12
-    COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
 
     # 봉 교체 감지/쿨다운(봉 단위)
     last_closed = None
