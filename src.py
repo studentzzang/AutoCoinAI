@@ -26,18 +26,16 @@ session = HTTP(
 
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["XRPUSDT"]
+SYMBOL = ["DOGEUSDT"]
 SYMBOL = [s.strip().upper() for s in SYMBOL]
 LEVERAGE = ["2"] #  must be string
 PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
-MAX_ADD_ENTRIES = 1 # 같은 포지션 추가 진입 최대회수
 
 INTERVAL = 5        # 1 또는 3 권장
 LONG_SWITCH_RSI = 30   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
 SHORT_SWITCH_RSI = 70  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
 
 RSI_PERIOD = 12
-GAP_LIMIT = 2 #RSI 기준점 찍고 이 만큼 복구 시 진입
 COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
 
 # --- GLOBAL VARIABLE LINE ---- #
@@ -402,46 +400,56 @@ def start():
 def update():
     global position, entry_price, tp_price
 
+    # 봉 교체 감지/쿨다운(봉 단위)
     last_closed = None
     cooldown = 0
+
+    # 시작 시 극단구간이면 첫 신호 패스
     is_first = True
 
-    last_peak_level = None
-    last_trough_level = None
+    # 최근 찍은 과매수/과매도 레벨
+    last_peak_level = None    # 70/75/80/85 중 '가장 높은' 값
+    last_trough_level = None  # 30/25/20/15 중 '가장 낮은' 값
 
-    pending_floor_level = None
-    pending_ceiling_level = None
+    # 포지션 보유 중 반대편 레벨 기록
+    pending_floor_level = None    # 숏 보유 시: 최저(15/20/25/30)
+    pending_ceiling_level = None  # 롱  보유 시: 최고(70/75/80/85)
 
+    # 플래그(요청 스타일)
     peaked70_after_entry = peaked75_after_entry = False
     peaked80_after_entry = peaked85_after_entry = False
     dipped30_after_entry = dipped25_after_entry = False
     dipped20_after_entry = dipped15_after_entry = False
-
-    add_count = 0
 
     while True:
         for i in range(len(SYMBOL)):
             symbol = SYMBOL[i]
             leverage = LEVERAGE[i]
             
-            Pnl = get_PnL(symbol)
-            ROE = get_ROE(symbol)
+            #Pnl, ROE
+            Pnl = get_PnL(symbol) #수익 $
+            ROE = get_ROE(symbol) #수익률 %
 
+            # 가격/RSI (RSI는 현재 진행중 캔들 포함값)
             closes3 = get_close_price(symbol, interval=INTERVAL) 
             c_prev2, c_prev1, cur_3 = closes3
             RSI_12 = get_RSI(symbol, interval=INTERVAL, period=RSI_PERIOD)
 
+            # 시작 가드
             if is_first and (RSI_12 >= 65 or RSI_12 <= 35):
                 is_first = False
                 continue
             is_first = False
 
+            # 봉 교체 감지 (쿨다운 감소만 봉 기준으로)
             new_bar = (last_closed is None) or (last_closed != c_prev1)
             if new_bar:
                 last_closed = c_prev1
                 if cooldown > 0:
                     cooldown -= 1
 
+            # ===== 레벨 갱신 (intra-bar 포함, 즉시 반영) =====
+            # 과매수 측: 최근에 찍은 '최상위' 레벨 유지
             if RSI_12 >= 85:
                 last_peak_level = 85
             elif RSI_12 >= 80:
@@ -453,19 +461,22 @@ def update():
                 if last_peak_level is None or last_peak_level < 70:
                     last_peak_level = 70
 
+            # 과매도 측: 최근에 찍은 '최하위' 레벨 유지
             if RSI_12 <= 15:
                 last_trough_level = 15
             elif RSI_12 <= 20:
                 if (last_trough_level is None) or (last_trough_level > 20):
                     last_trough_level = 20
             elif RSI_12 <= 25:
-                if (last_trough_level is None) or (last_trrough_level > 25):
-                    last_trrough_level = 25
+                if (last_trough_level is None) or (last_trough_level > 25):
+                    last_trough_level = 25
             elif RSI_12 <= 30:
                 if (last_trough_level is None) or (last_trough_level > 30):
                     last_trough_level = 30
 
+            # ===== 무포지션: '봉 마감 기다리지 않고' 즉시 진입 =====
             if position is None and cooldown == 0:
+                # 숏: (최근 과매수 레벨 - 3) 이하로 내려오면 즉시
                 if last_peak_level is not None:
                     short_trigger = last_peak_level - 3
                     if RSI_12 <= short_trigger:
@@ -477,11 +488,13 @@ def update():
                             cooldown = COOLDOWN_BARS
                             pending_floor_level = None
                             dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
+                            # 사용한 피크 레벨 리셋
                             last_peak_level = None
+                            # 천장 플래그 리셋
                             peaked70_after_entry = peaked75_after_entry = False
                             peaked80_after_entry = peaked85_after_entry = False
-                            add_count = 0
 
+                # 롱: (최근 과매도 레벨 + 3) 이상으로 올라오면 즉시
                 if position is None and last_trough_level is not None and cooldown == 0:
                     long_trigger = last_trough_level + 3
                     if RSI_12 >= long_trigger:
@@ -494,11 +507,14 @@ def update():
                             pending_ceiling_level = None
                             peaked70_after_entry = peaked75_after_entry = False
                             peaked80_after_entry = peaked85_after_entry = False
+                            # 사용한 바닥 레벨 리셋
                             last_trough_level = None
+                            # 바닥 플래그 리셋
                             dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
-                            add_count = 0
 
+            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산(+즉시 롱 전환) =====
             elif position == 'short':
+                # 최저 레벨 기록(intra-bar)
                 if RSI_12 <= 30:
                     dipped30_after_entry = True
                     pending_floor_level = 30 if pending_floor_level is None else min(pending_floor_level, 30)
@@ -512,50 +528,28 @@ def update():
                     dipped15_after_entry = True
                     pending_floor_level = 15 if pending_floor_level is None else min(pending_floor_level, 15)
 
-                if (add_count < MAX_ADD_ENTRIES) and (RSI_12 <= 30 or RSI_12 <= 25 or RSI_12 <= 20 or RSI_12 <= 15):
-                    px2, qty2 = entry_position(symbol=symbol, side="Sell", leverage=leverage)
-                    if qty2 > 0:
-                        add_count += 1
-                        base = "https://api.bybit.com"
-                        api_key = _api_key.strip()
-                        api_secret = _api_secret.strip()
-                        ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
-                        recv = "10000"
-                        params = {"category": "linear", "symbol": str(symbol).strip().upper()}
-                        qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
-                        sign = hmac.new(api_secret.encode(), (ts + api_key + recv + qs).encode(), hashlib.sha256).hexdigest()
-                        headers = {
-                            "X-BAPI-API-KEY": api_key,
-                            "X-BAPI-TIMESTAMP": ts,
-                            "X-BAPI-RECV-WINDOW": recv,
-                            "X-BAPI-SIGN": sign,
-                            "X-BAPI-SIGN-TYPE": "2",
-                        }
-                        d = requests.get(base + "/v5/position/list?" + qs, headers=headers, timeout=10).json()
-                        lst = d.get("result", {}).get("list") or []
-                        if lst:
-                            entry_price = float(lst[0].get("avgPrice") or entry_price)
+                    if pending_floor_level is not None:
+                        trigger_up = pending_floor_level + 3
+                        if RSI_12 >= trigger_up:
+                            close_position(symbol=symbol, side="Buy")
+                            position = None; entry_price = None; tp_price = None
+                            cooldown = COOLDOWN_BARS
 
-                if pending_floor_level is not None:
-                    trigger_up = pending_floor_level + GAP_LIMIT
-                    if RSI_12 >= trigger_up:
-                        close_position(symbol=symbol, side="Buy")
-                        position = None; entry_price = None; tp_price = None
-                        cooldown = COOLDOWN_BARS
-                        add_count = 0
-                        if RSI_12 <= LONG_SWITCH_RSI:
-                            px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                            if qty > 0:
-                                position = 'long'
-                                entry_price = px
-                                tp_price = None
-                                cooldown = COOLDOWN_BARS
-                                pending_floor_level = None
-                                dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
-                                last_trough_level = None
-                                add_count = 0
+                            # ✅ 스위칭 조건 추가
+                            if RSI_12 <= LONG_SWITCH_RSI:
+                                px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                                if qty > 0:
+                                    position = 'long'
+                                    entry_price = px
+                                    tp_price = None
+                                    cooldown = COOLDOWN_BARS
+                                    pending_floor_level = None
+                                    dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
+                                    last_trough_level = None
 
+            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+즉시 숏 전환) =====
             elif position == 'long':
+                # 최고 레벨 기록(intra-bar)
                 if RSI_12 >= 70:
                     peaked70_after_entry = True
                     pending_ceiling_level = 70 if pending_ceiling_level is None else max(pending_ceiling_level, 70)
@@ -569,37 +563,14 @@ def update():
                     peaked85_after_entry = True
                     pending_ceiling_level = 85 if pending_ceiling_level is None else max(pending_ceiling_level, 85)
 
-                if (add_count < MAX_ADD_ENTRIES) and (RSI_12 >= 70 or RSI_12 >= 75 or RSI_12 >= 80 or RSI_12 >= 85):
-                    px2, qty2 = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                    if qty2 > 0:
-                        add_count += 1
-                        base = "https://api.bybit.com"
-                        api_key = _api_key.strip()
-                        api_secret = _api_secret.strip()
-                        ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
-                        recv = "10000"
-                        params = {"category": "linear", "symbol": str(symbol).strip().upper()}
-                        qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
-                        sign = hmac.new(api_secret.encode(), (ts + api_key + recv + qs).encode(), hashlib.sha256).hexdigest()
-                        headers = {
-                            "X-BAPI-API-KEY": api_key,
-                            "X-BAPI-TIMESTAMP": ts,
-                            "X-BAPI-RECV-WINDOW": recv,
-                            "X-BAPI-SIGN": sign,
-                            "X-BAPI-SIGN-TYPE": "2",
-                        }
-                        d = requests.get(base + "/v5/position/list?" + qs, headers=headers, timeout=10).json()
-                        lst = d.get("result", {}).get("list") or []
-                        if lst:
-                            entry_price = float(lst[0].get("avgPrice") or entry_price)
-
                 if pending_ceiling_level is not None:
-                    trigger_down = pending_ceiling_level - GAP_LIMIT
+                    trigger_down = pending_ceiling_level - 3
                     if RSI_12 <= trigger_down:
                         close_position(symbol=symbol, side="Sell")
                         position = None; entry_price = None; tp_price = None
                         cooldown = COOLDOWN_BARS
-                        add_count = 0
+
+                        # ✅ 스위칭 조건 추가
                         if RSI_12 >= SHORT_SWITCH_RSI:
                             px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                             if qty > 0:
@@ -611,11 +582,11 @@ def update():
                                 peaked70_after_entry = peaked75_after_entry = False
                                 peaked80_after_entry = peaked85_after_entry = False
                                 last_peak_level = None
-                                add_count = 0
 
+            # 출력(형식 유지, EMA 표기 제거)
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🪙{symbol} 💲현재가: {cur_3:.5f}$  🚩포지션 {position} | ❣ RSI: {RSI_12:.2f} | 💎Pnl: {Pnl:.3f} ⚜️ROE: {ROE:.2f}")
 
-        time.sleep(5)
+        time.sleep(10)
 
 
 
