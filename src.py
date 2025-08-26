@@ -31,11 +31,11 @@ SYMBOL = [s.strip().upper() for s in SYMBOL]
 LEVERAGE = ["3"] #  must be string
 PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
-INTERVAL = 30        # 1 또는 3 권장
+INTERVAL = 1      # 1 또는 3 권장
 LONG_SWITCH_RSI = 28   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
 SHORT_SWITCH_RSI = 72  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
 
-RSI_PERIOD = 12
+RSI_PERIOD = 10
 STOCH_RSI_PERIOD = 14
 STOCH_LINE_PER = 3
 COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
@@ -588,7 +588,7 @@ def update():
                   f"🪙{symbol} 💲현재가: {cur_3:.5f}$ 🚩포지션 {position} "
                   f"| ❣ RSI: {RSI_12:.2f} | 💎Pnl: {Pnl:.3f} ⚜️ROE: {ROE:.2f}")
 
-        time.sleep(15)
+        time.sleep(6)
 
 
 
