@@ -26,14 +26,14 @@ session = HTTP(
 
 
 # ---- PARAMITER LINE ---- # 이 후 UI개발에 사용
-SYMBOL = ["DOGEUSDT"]
+SYMBOL = ["PUMPFUNUSDT"]
 SYMBOL = [s.strip().upper() for s in SYMBOL]
-LEVERAGE = ["2"] #  must be string
+LEVERAGE = ["3"] #  must be string
 PCT     = 50 # 투자비율 n% (후에 심볼 개수 비례도 구현)
 
-INTERVAL = 5        # 1 또는 3 권장
-LONG_SWITCH_RSI = 30   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
-SHORT_SWITCH_RSI = 70  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
+INTERVAL = 30        # 1 또는 3 권장
+LONG_SWITCH_RSI = 28   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
+SHORT_SWITCH_RSI = 72  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
 
 RSI_PERIOD = 12
 STOCH_RSI_PERIOD = 14
@@ -42,9 +42,6 @@ COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
 
 # --- GLOBAL VARIABLE LINE ---- #
 
-init_regime = None   # "golden" 또는 "dead"
-primed = False       # 반대 크로스가 한 번 나와 거래 시작 가능한지
-    
 position= None
 entry_price = None #포지션 진입가
 tp_price = None
@@ -142,18 +139,76 @@ def get_kline(symbol, interval):
     return get_kline_http(symbol, interval)
 
 def get_PnL(symbol: str):
-    res = session.get_positions(category="linear", symbol=symbol)
-    return float(res["result"]["list"][0]["closedPnl"])
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+    s = str(symbol).strip().upper()
+
+    ts = str(int(time.time() * 1000 ))         # ✅ 로컬 시간(ms)
+    recv = "30000"
+
+    # 쿼리스트링은 반드시 key 정렬
+    params = {"category": "linear", "symbol": s}
+    qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
+
+    # 서명: timestamp + api_key + recv_window + queryString
+    payload = ts + api_key + recv + qs
+    sign = hmac.new(api_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+    }
+
+    url = f"{base}/v5/position/list?{qs}"
+    d = requests.get(url, headers=headers, timeout=10).json()
+    if d.get("retCode") != 0:
+        raise RuntimeError(f"position/list {d.get('retCode')} {d.get('retMsg')} | {d}")
+
+    lst = d.get("result", {}).get("list") or []
+    if not lst:
+        return 0.0
+
+    return float(lst[0].get("unrealisedPnl", 0.0) or 0.0)
 
 def get_ROE(symbol: str):
-    res = session.get_positions(category="linear", symbol=symbol)
-    pos = res["result"]["list"][0]
+    base = "https://api.bybit.com"
+    api_key = _api_key.strip()
+    api_secret = _api_secret.strip()
+    s = str(symbol).strip().upper()
 
-    closed_pnl = float(pos["closedPnl"])       # 실현 손익 (USDT)
-    position_im = float(pos["positionIM"])     # 증거금 (USDT)
+    ts = str(int(time.time() * 1000 ))       # 로컬 시간(ms)
+    recv = "30000"
 
-    roe_pct = (closed_pnl / position_im * 100) if position_im > 0 else 0.0
-    return roe_pct
+    params = {"category": "linear", "symbol": s}
+    qs = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    sign = hmac.new(api_secret.encode(), (ts + api_key + recv + qs).encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "X-BAPI-API-KEY": api_key,
+        "X-BAPI-TIMESTAMP": ts,
+        "X-BAPI-RECV-WINDOW": recv,
+        "X-BAPI-SIGN": sign,
+        "X-BAPI-SIGN-TYPE": "2",
+    }
+
+    url = f"{base}/v5/position/list?{qs}"
+    d = requests.get(url, headers=headers, timeout=10).json()
+    if d.get("retCode") != 0:
+        raise RuntimeError(f"position/list {d.get('retCode')} {d.get('retMsg')} | {d}")
+
+    lst = d.get("result", {}).get("list") or []
+    if not lst:
+        return 0.0
+
+    pos = lst[0]
+    unrealised_pnl = get_PnL(symbol)
+    position_im = float(pos.get("positionIM", 0.0))
+    return (unrealised_pnl / position_im * 100) if position_im > 0 else 0.0
+
 
 def get_stoch_rsi(symbol, interval):
 
@@ -378,11 +433,13 @@ def update():
     cooldown = 0
     is_first = True
 
-    last_peak_level = None
-    last_trough_level = None
+    # 최근 찍은 과매수/과매도 레벨 (RSI 기준)
+    last_peak_level = None    # 70/75/80/85 중 '가장 높은' 값
+    last_trough_level = None  # 30/25/20/15 중 '가장 낮은' 값
 
-    pending_floor_level = None
-    pending_ceiling_level = None
+    # 포지션 보유 중 반대편 레벨 기록
+    pending_floor_level = None    # 숏 보유 시: 최저(15/20/25/30)
+    pending_ceiling_level = None  # 롱  보유 시: 최고(70/75/80/85)
 
     while True:
         for i in range(len(SYMBOL)):
@@ -393,185 +450,146 @@ def update():
             Pnl = get_PnL(symbol)
             ROE = get_ROE(symbol)
 
-            # 가격/RSI (RSI는 현재 진행중 캔들 포함값)
-            closes3 = get_close_price(symbol, interval=INTERVAL) 
+            # 가격/RSI
+            closes3 = get_close_price(symbol, interval=INTERVAL)
             c_prev2, c_prev1, cur_3 = closes3
             RSI_12 = get_RSI(symbol, interval=INTERVAL, period=RSI_PERIOD)
 
-            # ---- RSI / StochRSI ----
-            RSI = get_RSI(symbol, interval=INTERVAL, period=RSI_PERIOD)  # 큰 추세용
-            k, d = get_stoch_rsi(symbol, interval=INTERVAL,
-                                  rsi_len=RSI_PERIOD, stoch_len=14,
-                                  smooth_k=3, smooth_d=3)
-            STOCH_RSI = k  # 메인으로 %K 사용
-
-            # 시작 가드
-            if is_first and (RSI >= 65 or RSI <= 35):
+            # 시작 가드(첫 진입 극단값 회피)
+            if is_first and (RSI_12 >= 65 or RSI_12 <= 35):
                 is_first = False
                 continue
             is_first = False
 
-            # 봉 교체 감지 (쿨다운 감소만 봉 기준으로)
-            # 봉 교체 감지
-            closes3 = get_close_price(symbol, interval=INTERVAL)
-            c_prev2, c_prev1, cur_3 = closes3
+            # 봉 교체 감지 (쿨다운은 봉 단위로 감소)
             new_bar = (last_closed is None) or (last_closed != c_prev1)
             if new_bar:
                 last_closed = c_prev1
                 if cooldown > 0:
                     cooldown -= 1
 
-            # ===== 레벨 기록 (Stoch RSI 기준) =====
-            if STOCH_RSI >= 95:
-                last_peak_level = 95
-            elif STOCH_RSI >= 90:
-                if last_peak_level is None or last_peak_level < 90:
-                    last_peak_level = 90
-            elif STOCH_RSI >= 85:
-                if last_peak_level is None or last_peak_level < 85:
-                    last_peak_level = 85
+            # ===== 레벨 갱신 (RSI 기준) =====
+            # 과매수 측
+            if RSI_12 >= 85:
+                last_peak_level = 85
+            elif RSI_12 >= 80:
+                if last_peak_level is None or last_peak_level < 80:
+                    last_peak_level = 80
+            elif RSI_12 >= 75:
+                if last_peak_level is None or last_peak_level < 75:
+                    last_peak_level = 75
+            elif RSI_12 >= 70:
+                if last_peak_level is None or last_peak_level < 70:
+                    last_peak_level = 70
 
-            if STOCH_RSI <= 5:
-                last_trough_level = 5
-            elif STOCH_RSI <= 10:
-                if last_trough_level is None or last_trough_level > 10:
-                    last_trough_level = 10
-            elif STOCH_RSI <= 15:
-                if last_trough_level is None or last_trough_level > 15:
-                    last_trough_level = 15
+            # 과매도 측
+            if RSI_12 <= 15:
+                last_trough_level = 15
+            elif RSI_12 <= 20:
+                if (last_trough_level is None) or (last_trough_level > 20):
+                    last_trough_level = 20
+            elif RSI_12 <= 25:
+                if (last_trough_level is None) or (last_trough_level > 25):
+                    last_trough_level = 25
+            elif RSI_12 <= 30:
+                if (last_trough_level is None) or (last_trough_level > 30):
+                    last_trough_level = 30
 
-            # ===== 무포지션 진입 =====
+            # ===== 무포지션: '봉 마감 기다리지 않고' 즉시 진입 =====
             if position is None and cooldown == 0:
-                # 숏 진입
+                # 숏: (최근 과매수 레벨 - 3) 이하로 내려오면 즉시
                 if last_peak_level is not None:
-                    trigger = last_peak_level - 3
-                    if STOCH_RSI <= trigger and RSI >= 65:   # RSI 조건 추가
-                        px, qty = entry_position(symbol, side="Sell", leverage=leverage)
+                    short_trigger = last_peak_level - 3
+                    if RSI_12 <= short_trigger:
+                        px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                         if qty > 0:
-                            position = 'short'; entry_price = px; tp_price = None
+                            position = 'short'
+                            entry_price = px
+                            tp_price = None
                             cooldown = COOLDOWN_BARS
-                            last_peak_level = None
                             pending_floor_level = None
+                            last_peak_level = None  # 사용한 피크 레벨 리셋
 
-                # 롱 진입
-                if position is None and last_trough_level is not None:
-                    trigger = last_trough_level + 3
-                    if STOCH_RSI >= trigger and RSI <= 35:   # RSI 조건 추가
-                        px, qty = entry_position(symbol, side="Buy", leverage=leverage)
+                # 롱: (최근 과매도 레벨 + 3) 이상으로 올라오면 즉시
+                if position is None and last_trough_level is not None and cooldown == 0:
+                    long_trigger = last_trough_level + 3
+                    if RSI_12 >= long_trigger:
+                        px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                         if qty > 0:
-                            position = 'long'; entry_price = px; tp_price = None
+                            position = 'long'
+                            entry_price = px
+                            tp_price = None
                             cooldown = COOLDOWN_BARS
-                            last_trough_level = None
                             pending_ceiling_level = None
-                            peaked70_after_entry = peaked75_after_entry = False
-                            peaked80_after_entry = peaked85_after_entry = False
-                            # 사용한 바닥 레벨 리셋
-                            last_trough_level = None
-                            # 바닥 플래그 리셋
-                            dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
+                            last_trough_level = None  # 사용한 바닥 레벨 리셋
 
-            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산(+즉시 롱 전환) =====
-            # ===== 숏 보유 → 익절/스위칭 =====
+            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산(+조건부 롱 전환) =====
             elif position == 'short':
                 # 최저 레벨 기록(intra-bar)
                 if RSI_12 <= 30:
-                    dipped30_after_entry = True
                     pending_floor_level = 30 if pending_floor_level is None else min(pending_floor_level, 30)
                 if RSI_12 <= 25:
-                    dipped25_after_entry = True
                     pending_floor_level = 25 if pending_floor_level is None else min(pending_floor_level, 25)
                 if RSI_12 <= 20:
-                    dipped20_after_entry = True
                     pending_floor_level = 20 if pending_floor_level is None else min(pending_floor_level, 20)
                 if RSI_12 <= 15:
-                    dipped15_after_entry = True
-                if STOCH_RSI <= 15:
                     pending_floor_level = 15 if pending_floor_level is None else min(pending_floor_level, 15)
-
-                    if pending_floor_level is not None:
-                        trigger_up = pending_floor_level + 3
-                        if RSI_12 >= trigger_up:
-                            close_position(symbol=symbol, side="Buy")
-                            position = None; entry_price = None; tp_price = None
-                            cooldown = COOLDOWN_BARS
-
-                            # ✅ 스위칭 조건 추가
-                            if RSI_12 <= LONG_SWITCH_RSI:
-                                px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
-                                if qty > 0:
-                                    position = 'long'
-                                    entry_price = px
-                                    tp_price = None
-                                    cooldown = COOLDOWN_BARS
-                                    pending_floor_level = None
-                                    dipped30_after_entry = dipped25_after_entry = dipped20_after_entry = dipped15_after_entry = False
-                                    last_trough_level = None
-                if STOCH_RSI <= 10:
-                    pending_floor_level = 10 if pending_floor_level is None else min(pending_floor_level, 10)
-                if STOCH_RSI <= 5:
-                    pending_floor_level = 5 if pending_floor_level is None else min(pending_floor_level, 5)
 
                 if pending_floor_level is not None:
                     trigger_up = pending_floor_level + 3
-                    if STOCH_RSI >= trigger_up:
-                        close_position(symbol, side="Buy")
+                    if RSI_12 >= trigger_up:
+                        close_position(symbol=symbol, side="Buy")
                         position = None; entry_price = None; tp_price = None
                         cooldown = COOLDOWN_BARS
-                        if RSI <= LONG_SWITCH_RSI:   # RSI 조건도 확인
-                            px, qty = entry_position(symbol, side="Buy", leverage=leverage)
-                            if qty > 0:
-                                position = 'long'; entry_price = px; tp_price = None
-                                cooldown = COOLDOWN_BARS
 
-            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+즉시 숏 전환) =====
-            # ===== 롱 보유 → 익절/스위칭 =====
+                        # 조건부 스위칭
+                        if RSI_12 <= LONG_SWITCH_RSI:
+                            px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
+                            if qty > 0:
+                                position = 'long'
+                                entry_price = px
+                                tp_price = None
+                                cooldown = COOLDOWN_BARS
+                                pending_floor_level = None
+                                last_trough_level = None
+
+            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+조건부 숏 전환) =====
             elif position == 'long':
                 # 최고 레벨 기록(intra-bar)
                 if RSI_12 >= 70:
-                    peaked70_after_entry = True
                     pending_ceiling_level = 70 if pending_ceiling_level is None else max(pending_ceiling_level, 70)
                 if RSI_12 >= 75:
-                    peaked75_after_entry = True
                     pending_ceiling_level = 75 if pending_ceiling_level is None else max(pending_ceiling_level, 75)
                 if RSI_12 >= 80:
-                    peaked80_after_entry = True
                     pending_ceiling_level = 80 if pending_ceiling_level is None else max(pending_ceiling_level, 80)
                 if RSI_12 >= 85:
-                    peaked85_after_entry = True
-                if STOCH_RSI >= 85:
                     pending_ceiling_level = 85 if pending_ceiling_level is None else max(pending_ceiling_level, 85)
-
-                if STOCH_RSI >= 90:
-                    pending_ceiling_level = 90 if pending_ceiling_level is None else max(pending_ceiling_level, 90)
-                if STOCH_RSI >= 95:
-                    pending_ceiling_level = 95 if pending_ceiling_level is None else max(pending_ceiling_level, 95)
 
                 if pending_ceiling_level is not None:
                     trigger_down = pending_ceiling_level - 3
                     if RSI_12 <= trigger_down:
                         close_position(symbol=symbol, side="Sell")
-                    trigger_down = pending_ceiling_level - 3
-                    if STOCH_RSI <= trigger_down:
-                        close_position(symbol, side="Sell")
                         position = None; entry_price = None; tp_price = None
                         cooldown = COOLDOWN_BARS
 
-                        # ✅ 스위칭 조건 추가
+                        # 조건부 스위칭
                         if RSI_12 >= SHORT_SWITCH_RSI:
                             px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
-                        if RSI >= SHORT_SWITCH_RSI:   # RSI 조건도 확인
-                            px, qty = entry_position(symbol, side="Sell", leverage=leverage)
                             if qty > 0:
-                                position = 'short'; entry_price = px; tp_price = None
+                                position = 'short'
+                                entry_price = px
+                                tp_price = None
                                 cooldown = COOLDOWN_BARS
+                                pending_ceiling_level = None
+                                last_peak_level = None
 
             # 출력
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
                   f"🪙{symbol} 💲현재가: {cur_3:.5f}$ 🚩포지션 {position} "
-                  f"| ❣ RSI: {RSI:.2f} | 📊 StochRSI: {STOCH_RSI:.2f} "
-                  f"| 💎Pnl: {Pnl:.3f} ⚜️ROE: {ROE:.2f}")
+                  f"| ❣ RSI: {RSI_12:.2f} | 💎Pnl: {Pnl:.3f} ⚜️ROE: {ROE:.2f}")
 
-        time.sleep(10)
+        time.sleep(15)
+
 
 
 
