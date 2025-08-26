@@ -35,7 +35,8 @@ INTERVAL = 1      # 1 또는 3 권장
 LONG_SWITCH_RSI = 28   # 숏 -> 롱 전환 허용 최대 RSI (이하일 때만 스위칭)
 SHORT_SWITCH_RSI = 72  # 롱  -> 숏 전환 허용 최소 RSI (이상일 때만 스위칭)
 
-RSI_PERIOD = 10
+RSI_PERIOD = 12
+ENTRY_BAND = 8  # 트리거에서 허용하는 최대 이탈폭(±). 4~8 사이 조절
 STOCH_RSI_PERIOD = 14
 STOCH_LINE_PER = 3
 COOLDOWN_BARS = 2   # 진입/청산 직후 쉬는 '봉' 수
@@ -441,6 +442,15 @@ def update():
     pending_floor_level = None    # 숏 보유 시: 최저(15/20/25/30)
     pending_ceiling_level = None  # 롱  보유 시: 최고(70/75/80/85)
 
+    # --- 재진입(스위칭) 전용 플래그 ---
+    armed_short_switch = False    # 롱 보유 중 한 번이라도 RSI >= SHORT_SWITCH_RSI 찍었는지
+    armed_long_switch  = False    # 숏 보유 중 한 번이라도 RSI <= LONG_SWITCH_RSI 찍었는지
+    max_rsi_since_entry = None    # 롱 보유 중 최고 RSI (참고)
+    min_rsi_since_entry = None    # 숏 보유 중 최저 RSI (참고)
+
+
+    prev_rsi = {s: None for s in SYMBOL}  # 심볼별 직전 RSI
+
     while True:
         for i in range(len(SYMBOL)):
             symbol = SYMBOL[i]
@@ -458,6 +468,7 @@ def update():
             # 시작 가드(첫 진입 극단값 회피)
             if is_first and (RSI_12 >= 65 or RSI_12 <= 35):
                 is_first = False
+                prev_rsi[symbol] = RSI_12
                 continue
             is_first = False
 
@@ -495,12 +506,14 @@ def update():
                 if (last_trough_level is None) or (last_trough_level > 30):
                     last_trough_level = 30
 
-            # ===== 무포지션: '봉 마감 기다리지 않고' 즉시 진입 =====
+            # ===== 무포지션: '봉 마감 안 기다리고' 즉시 진입(크로스+밴드 적용) =====
             if position is None and cooldown == 0:
-                # 숏: (최근 과매수 레벨 - 3) 이하로 내려오면 즉시
+                # 숏: (최근 과매수 레벨 - 3) '크로스 다운' + 트리거 근처
                 if last_peak_level is not None:
                     short_trigger = last_peak_level - 3
-                    if RSI_12 <= short_trigger:
+                    if ((prev_rsi[symbol] is None or prev_rsi[symbol] > short_trigger)
+                        and RSI_12 <= short_trigger
+                        and RSI_12 >= short_trigger - ENTRY_BAND):
                         px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                         if qty > 0:
                             position = 'short'
@@ -509,11 +522,21 @@ def update():
                             cooldown = COOLDOWN_BARS
                             pending_floor_level = None
                             last_peak_level = None  # 사용한 피크 레벨 리셋
+                            # 스위칭 플래그 초기화(숏→롱)
+                            armed_short_switch = False
+                            max_rsi_since_entry = None
+                            armed_long_switch = (RSI_12 <= LONG_SWITCH_RSI)
+                            min_rsi_since_entry = RSI_12
+                            prev_rsi[symbol] = RSI_12
+                            # 다음 심볼/다음 루프
+                            continue
 
-                # 롱: (최근 과매도 레벨 + 3) 이상으로 올라오면 즉시
+                # 롱: (최근 과매도 레벨 + 3) '크로스 업' + 트리거 근처
                 if position is None and last_trough_level is not None and cooldown == 0:
                     long_trigger = last_trough_level + 3
-                    if RSI_12 >= long_trigger:
+                    if ((prev_rsi[symbol] is None or prev_rsi[symbol] < long_trigger)
+                        and RSI_12 >= long_trigger
+                        and RSI_12 <= long_trigger + ENTRY_BAND):
                         px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                         if qty > 0:
                             position = 'long'
@@ -522,8 +545,15 @@ def update():
                             cooldown = COOLDOWN_BARS
                             pending_ceiling_level = None
                             last_trough_level = None  # 사용한 바닥 레벨 리셋
+                            # 스위칭 플래그 초기화(롱→숏)
+                            armed_long_switch = False
+                            min_rsi_since_entry = None
+                            armed_short_switch = (RSI_12 >= SHORT_SWITCH_RSI)
+                            max_rsi_since_entry = RSI_12
+                            prev_rsi[symbol] = RSI_12
+                            continue
 
-            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산(+조건부 롱 전환) =====
+            # ===== 숏 보유: 바닥 찍고 +3 반등 시 청산 (+ 조건부 롱 전환) =====
             elif position == 'short':
                 # 최저 레벨 기록(intra-bar)
                 if RSI_12 <= 30:
@@ -535,15 +565,18 @@ def update():
                 if RSI_12 <= 15:
                     pending_floor_level = 15 if pending_floor_level is None else min(pending_floor_level, 15)
 
+                # 스위칭 무장(숏→롱): 보유 중 한 번이라도 LONG_SWITCH_RSI 이하
+                if (min_rsi_since_entry is None) or (RSI_12 < min_rsi_since_entry):
+                    min_rsi_since_entry = RSI_12
+                if RSI_12 <= LONG_SWITCH_RSI:
+                    armed_long_switch = True
+
                 if pending_floor_level is not None:
                     trigger_up = pending_floor_level + 3
                     if RSI_12 >= trigger_up:
                         close_position(symbol=symbol, side="Buy")
-                        position = None; entry_price = None; tp_price = None
-                        cooldown = COOLDOWN_BARS
-
-                        # 조건부 스위칭
-                        if RSI_12 <= LONG_SWITCH_RSI:
+                        # 조건부 즉시 롱 전환(무장되어 있을 때만)
+                        if armed_long_switch:
                             px, qty = entry_position(symbol=symbol, side="Buy", leverage=leverage)
                             if qty > 0:
                                 position = 'long'
@@ -551,9 +584,22 @@ def update():
                                 tp_price = None
                                 cooldown = COOLDOWN_BARS
                                 pending_floor_level = None
+                                armed_long_switch  = False
+                                min_rsi_since_entry = None
+                                armed_short_switch = (RSI_12 >= SHORT_SWITCH_RSI)
+                                max_rsi_since_entry = RSI_12
                                 last_trough_level = None
+                                prev_rsi[symbol] = RSI_12
+                                continue
+                        # 전환 조건 미충족 → 포지션만 닫고 관망
+                        position = None; entry_price = None; tp_price = None
+                        cooldown = COOLDOWN_BARS
+                        pending_floor_level = None
+                        armed_long_switch  = False
+                        min_rsi_since_entry = None
+                        last_trough_level = None
 
-            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산(+조건부 숏 전환) =====
+            # ===== 롱 보유: 천장 찍고 -3 하락 시 청산 (+ 조건부 숏 전환) =====
             elif position == 'long':
                 # 최고 레벨 기록(intra-bar)
                 if RSI_12 >= 70:
@@ -565,15 +611,18 @@ def update():
                 if RSI_12 >= 85:
                     pending_ceiling_level = 85 if pending_ceiling_level is None else max(pending_ceiling_level, 85)
 
+                # 스위칭 무장(롱→숏): 보유 중 한 번이라도 SHORT_SWITCH_RSI 이상
+                if (max_rsi_since_entry is None) or (RSI_12 > max_rsi_since_entry):
+                    max_rsi_since_entry = RSI_12
+                if RSI_12 >= SHORT_SWITCH_RSI:
+                    armed_short_switch = True
+
                 if pending_ceiling_level is not None:
                     trigger_down = pending_ceiling_level - 3
                     if RSI_12 <= trigger_down:
                         close_position(symbol=symbol, side="Sell")
-                        position = None; entry_price = None; tp_price = None
-                        cooldown = COOLDOWN_BARS
-
-                        # 조건부 스위칭
-                        if RSI_12 >= SHORT_SWITCH_RSI:
+                        # 조건부 즉시 숏 전환(무장되어 있을 때만)
+                        if armed_short_switch:
                             px, qty = entry_position(symbol=symbol, side="Sell", leverage=leverage)
                             if qty > 0:
                                 position = 'short'
@@ -581,15 +630,30 @@ def update():
                                 tp_price = None
                                 cooldown = COOLDOWN_BARS
                                 pending_ceiling_level = None
+                                armed_short_switch = False
+                                max_rsi_since_entry = None
+                                armed_long_switch  = (RSI_12 <= LONG_SWITCH_RSI)
+                                min_rsi_since_entry = RSI_12
                                 last_peak_level = None
+                                prev_rsi[symbol] = RSI_12
+                                continue
+                        # 전환 조건 미충족 → 포지션만 닫고 관망
+                        position = None; entry_price = None; tp_price = None
+                        cooldown = COOLDOWN_BARS
+                        pending_ceiling_level = None
+                        armed_short_switch = False
+                        max_rsi_since_entry = None
+                        last_peak_level = None
 
             # 출력
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
                   f"🪙{symbol} 💲현재가: {cur_3:.5f}$ 🚩포지션 {position} "
                   f"| ❣ RSI: {RSI_12:.2f} | 💎Pnl: {Pnl:.3f} ⚜️ROE: {ROE:.2f}")
 
-        time.sleep(6)
+            # 직전 RSI 저장
+            prev_rsi[symbol] = RSI_12
 
+        time.sleep(6)
 
 
 
