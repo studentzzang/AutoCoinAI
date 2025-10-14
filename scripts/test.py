@@ -1,3 +1,4 @@
+# RSI 거래법 그대로@ -1,355 +0,0 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -15,13 +16,13 @@ import numpy as np
 from pybit.unified_trading import HTTP
 
 # ====== 사용자 설정 변수 ======
-SYMBOL = ["PUMPFUNUSDT"]                # 심볼 배열 (네가 수정)
+SYMBOL = ["ETHUSDT"]                # 심볼 배열 (네가 수정)
 LEVERAGE = 5                         # 레버리지
-TIMEFRAME = ["15","30"]                   # 분봉/주기 배열 ("1","3","5","15","30","60","120","240","720","D","W","M")
-RSI_PERIOD = [7,9,12]                     # RSI 기간 배열 (여러 개면 각각 파일 생성)
+TIMEFRAME = ["30"]                   # 분봉/주기 배열 ("1","3","5","15","30","60","120","240","720","D","W","M")
+RSI_PERIOD = [7,12]                     # RSI 기간 배열 (여러 개면 각각 파일 생성)
 EQUITY = 100.0                       # 가정 자본(USDT)
 START = "2025-01-01"                 # 시작일
-END   = "2025-09-20"                 # 종료일
+END   = "2025-10-12"                 # 종료일
 OUT_DIR = "tests"                    # 저장 경로
 MAX_CANDLES = 10000                  # 최대 캔들 수 (None 무제한)
 
@@ -31,7 +32,6 @@ SHORT_SWITCH_RSI = 72.0    # 이 값 이상 찍히면 숏 스위치 arm
 DOORSTEP_ENTRY = 7   # 진입 트리거용 되돌림(레벨±이 값)
 DOORSTEP_CLOSE = 3   # 청산 트리거용 되돌림(레벨±이 값)
 ENTRY_BAND     = 4   # 진입 허용 밴드(트리거 주변 슬랙)
-ROE_CLOSE_MIN  = 0.10
 
 COOLDOWN_BARS    = 0       # 진입/청산 후 대기 봉 수
 
@@ -259,7 +259,7 @@ def run(symbol: str, tf: str, rsi_period: int, leverage: float, equity: float,
                         # CLOSE LONG ...
 
                         # 롱 청산
-                        remark = f"close LONG (RSI≤{trigger_down:.1f} & ROE>{ROE_CLOSE_MIN*100:.0f}%)"
+                        remark = f"close LONG (RSI≤{trigger_down:.1f})"
                         pos_name = "CLOSE"
                         log.append([dt, symbol, tf, px, rv, pos_name, remark, entry_px, unreal, roe])
                         cooldown = COOLDOWN_BARS
@@ -309,7 +309,7 @@ def run(symbol: str, tf: str, rsi_period: int, leverage: float, equity: float,
                         # CLOSE SHORT ...
 
                         # 숏 청산
-                        remark = f"close SHORT (RSI≥{trigger_up:.1f} & ROE>{ROE_CLOSE_MIN*100:.0f}%)"
+                        remark = f"close SHORT (RSI≥{trigger_up:.1f})"
                         pos_name = "CLOSE"
                         log.append([dt, symbol, tf, px, rv, pos_name, remark, entry_px, unreal, roe])
                         cooldown = COOLDOWN_BARS
