@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# 이 코드는 청산, 진입 부분만 저장함
 
 import os, time
 from datetime import datetime, timezone
@@ -11,18 +10,18 @@ from pybit.unified_trading import HTTP
 
 # ================= 사용자 설정 =================
 OUT_DIR = r"d:\Projects\AutoCoinAI\tests" #왜 상대경로가 안 돼 ㅠ
-SYMBOLS        = ["BTCUSDT","XRPUSDT","PUMPFUNUSDT"]
-TIMEFRAMES     = ["30","60"]                 # 1H 기본
-EMA_FAST_ARR   = [7,10,15,20]
-EMA_SLOW_ARR   = [15,20,30,50]
+SYMBOLS        = ["BTCUSDT","DOGEUSDT", "PUMPFUNUSDT", "ETHUSDT"]
+TIMEFRAMES     = []                 # 1H 기본
+EMA_FAST_ARR   = [5, 8]
+EMA_SLOW_ARR   = [13, 15]
 EMA_PASS_GAP   = 35 #SLOW FAST이만큼차이나면 패스
-RSI_PERIODS    = [7,10,14] 
-DOORSTEP_ARR   = [4]
+RSI_PERIODS    = [12, 18, 24] 
+DOORSTEP_ARR   = [5, 10];
 EQUITY         = 100.0
 LEVERAGE       = 5
 START          = "2025-01-01"
 END            = None
-MAX_CANDLES    = 10000
+MAX_CANDLES    = 20000
 SLEEP_PER_REQ  = 0.12
 
 # ================= Bybit HTTP =================
