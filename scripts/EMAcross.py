@@ -11,14 +11,14 @@ from dotenv import load_dotenv, find_dotenv
 import bybit  # 네 로컬 모듈
 # =============== 사용자 설정 (심볼별 단일 TF) ===============
 SYMBOLS = {
-    "PUMPFUNUSDT": {"interval": "30", "fast": 5, "slow": 13},
+    "PUMPFUNUSDT": {"interval": "5", "fast": 3, "slow": 12},
    
 }
 LEVERAGE = 5           # 공통 레버리지
 PCT      = 50          # 각 심볼당 투자 비중(%), bybit.entry_position 내부에서 사용
 
 TP_ROE   = 7.5         # ROE% 익절
-SL_ROE   = 7.5         # ROE% 손절
+SL_ROE   = 10         # ROE% 손절
 LOOKBACK = 400         # EMA 계산용 캔들 개수
 
 POLL_SEC = 2.0         # 심볼 간 루프 주기
