@@ -9,14 +9,14 @@ from pybit.unified_trading import HTTP
 
 # ================= 사용자 설정 =================
 OUT_DIR        = r"D:\Projects\AutoCoinAI\test"   # 결과 저장 폴더
-SYMBOLS        = ["DOGEUSDT", "PUMPFUNUSDT", "ETHUSDT"]
-TIMEFRAMES     = [ "5","15","30","60"]                       # Bybit interval: "1","3","5","15","30","60",...,"D","W","M"
+SYMBOLS        = ["PUMPFUNUSDT"]
+TIMEFRAMES     = [ "5" ]                       # Bybit interval: "1","3","5","15","30","60",...,"D","W","M"
 
-EMA_FAST_ARR   = [5, 9,20]
-EMA_SLOW_ARR   = [13, 21,50]
+EMA_FAST_ARR   = [3,5,7,9]
+EMA_SLOW_ARR   = [9,12,15,20]
 
-TP_ROE_ARR     = [2.5, 5, 7.5]                    # ROE% 목표
-SL_ROE_ARR     = [2.5, 5, 7.5]                    # ROE% 손절
+TP_ROE_ARR     = [5, 7.5,10]                    # ROE% 목표
+SL_ROE_ARR     = [5, 7.5,10]                    # ROE% 손절
 
 EQUITY         = 100.0                            # 증거금(USDT)
 LEVERAGE       = 5

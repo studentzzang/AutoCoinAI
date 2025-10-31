@@ -10,13 +10,13 @@ from pybit.unified_trading import HTTP
 # ================= 사용자 설정 =================
 OUT_DIR        = r"d:\Projects\AutoCoinAI\test"
 SYMBOLS        = ["DOGEUSDT", "PUMPFUNUSDT", "ETHUSDT"]
-TIMEFRAMES     = ["5","15","30","60"]                    # Bybit 인터벌 문자열(아래 bybit_interval 참고)
+TIMEFRAMES     = ["5"]                    # Bybit 인터벌 문자열(아래 bybit_interval 참고)
 
-EMA_FAST_ARR   = [5, 9, 20]
-EMA_SLOW_ARR   = [13, 21,50]
+EMA_FAST_ARR   = [5, 8]
+EMA_SLOW_ARR   = [13]
 
-TP_ROE_ARR     = [2.5, 5, 7.5]                 # ROE% (레버리지 반영된 수익률)
-SL_ROE_ARR     = [2.5, 5, 7.5]                 # ROE%
+TP_ROE_ARR     = [2.5, 5, 7.5,10]                 # ROE% (레버리지 반영된 수익률)
+SL_ROE_ARR     = [2.5, 5, 7.5,10]                 # ROE%
 
 EQUITY         = 100.0                         # 계정 기준 증거금(USDT) 가정
 LEVERAGE       = 5
