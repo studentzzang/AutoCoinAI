@@ -1,245 +1,167 @@
-from dotenv import load_dotenv, find_dotenv
-from pybit.unified_trading import HTTP
-import os, sys
+import os, time
 import pandas as pd
-from datetime import datetime
-import time
-from math import floor, isclose
-import hmac, hashlib, requests, json
-from decimal import Decimal
+import numpy as np
+from datetime import datetime, timezone
+import bybit
+from bybit import (
+    get_kline_http, get_current_price, entry_position, close_position,
+    get_position_size, set_leverage, get_usdt, get_ROE, get_PnL
+)
 
-load_dotenv(find_dotenv(),override=True)
-_api_key = os.getenv("API_KEY"); _api_secret = os.getenv("API_KEY_SECRET")
+# ================= 사용자 설정 =================
+SYMBOLS        = ["PUMPFUNUSDT"]
+TIMEFRAMES     = ["15"]
+STOCH_PERIODS  = [9]
+K_SMOOTH_ARR   = [5]
+D_SMOOTH_ARR   = [3]
+TP_ROE_ARR     = [15]
+SL_ROE_ARR     = [15]
+GAP_ARR        = [1]      # K-D 최소 차이(%) 조건
+LEVERAGE_ARR   = [5]
+PCT_ARR        = [50]     # ← 심볼 개수와 길이 맞춤
 
-BYBIT_BASE = "https://api.bybit.com"
+# ================= 전역상태 =================
+open_positions = {s: None for s in SYMBOLS}   # "LONG"/"SHORT"/None
+entry_px       = {s: None for s in SYMBOLS}
 
-# -- 실행 코드에서 할당
-PCT      = 0    # 코인별 투자 비중(%)
-SYMBOLS = []
-entry_px  = {s: None for s in SYMBOLS}
+# ================= 유틸 =================
+def utc_now_str():
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-def get_usdt():
-    base="https://api.bybit.com"; api_key=_api_key.strip(); api_secret=_api_secret.strip()
-    ts=str(int(requests.get(base+"/v5/market/time",timeout=5).json()["result"]["timeSecond"])*1000); recv="10000"
-    params={"accountType":"UNIFIED","coin":"USDT"}
-    canonical="&".join(f"{k}={params[k]}" for k in sorted(params))
-    payload=ts+api_key+recv+canonical
-    sign=hmac.new(api_secret.encode(),payload.encode(),hashlib.sha256).hexdigest()
-    headers={"X-BAPI-API-KEY":api_key,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":recv,"X-BAPI-SIGN":sign,"X-BAPI-SIGN-TYPE":"2"}
-    d=requests.get(f"{base}/v5/account/wallet-balance?{canonical}",headers=headers,timeout=10).json()
-    if d.get("retCode")!=0: raise RuntimeError(f"wallet-balance {d.get('retCode')} {d.get('retMsg')}")
-    coin=next(c for c in d["result"]["list"][0]["coin"] if c["coin"]=="USDT")
-    return float(
-    coin.get("equity") 
-    )
-print("잔액:", get_usdt())  
-
-def set_leverage(symbol, leverage):
-    base="https://api.bybit.com"; api_key=_api_key.strip(); api_secret=_api_secret.strip()
-    s=str(symbol).strip().upper(); lev=str(leverage)
-    try:
-        ts=str(int(requests.get(base+"/v5/market/time",timeout=5).json()["result"]["timeSecond"])*1000); recv="10000"
-        body={"category":"linear","symbol":s,"buyLeverage":lev,"sellLeverage":lev}
-        payload=json.dumps(body,separators=(",",":"),ensure_ascii=False)
-        sign=hmac.new(api_secret.encode(),(ts+api_key+recv+payload).encode(),hashlib.sha256).hexdigest()
-        headers={"X-BAPI-API-KEY":api_key,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":recv,"X-BAPI-SIGN":sign,"X-BAPI-SIGN-TYPE":"2","Content-Type":"application/json"}
-        r=requests.post(base+"/v5/position/set-leverage",data=payload,headers=headers,timeout=10).json()
-        if r.get("retCode")==0: print(f"✅ {symbol} 레버리지 설정 완료: {leverage}x")
-        else: 
-          print(f"📛 {symbol} 레버리지 에러: 이미 {leverage}x 설정됨")
-    except Exception as e:
-        print(f"📛 {symbol} 레버리지 에러: {e}")
-
-def get_kline_http(symbol, interval, limit=200, start=None, end=None, timeout=10):
-    s=str(symbol).strip().upper(); iv=str(interval).upper()
-    params={"category":"linear","symbol":s,"interval":iv,"limit":int(limit)}
-    if start is not None: params["start"]=int(start)
-    if end   is not None: params["end"]=int(end)
-    r=requests.get(f"{BYBIT_BASE}/v5/market/kline",params=params,timeout=timeout)
-    if r.status_code!=200: raise RuntimeError(f"/v5/market/kline HTTP {r.status_code}: {r.text}")
-    data=r.json(); lst=data.get("result",{}).get("list") or []
-    
-    return lst[::-1]
-
-def get_kline(symbol, interval): return get_kline_http(symbol, interval)
-
-def get_PnL(symbol):
-    base="https://api.bybit.com"; api_key=_api_key.strip(); api_secret=_api_secret.strip(); s=str(symbol).strip().upper()
-    ts=str(int(time.time()*1000)); recv="30000"
-    params={"category":"linear","symbol":s}; qs="&".join(f"{k}={params[k]}" for k in sorted(params))
-    payload=ts+api_key+recv+qs; sign=hmac.new(api_secret.encode(),payload.encode(),hashlib.sha256).hexdigest()
-    headers={"X-BAPI-API-KEY":api_key,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":recv,"X-BAPI-SIGN":sign,"X-BAPI-SIGN-TYPE":"2"}
-    d=requests.get(f"{base}/v5/position/list?{qs}",headers=headers,timeout=10).json()
-    if d.get("retCode")!=0: raise RuntimeError(f"position/list {d.get('retCode')} {d.get('retMsg')}")
-    lst=d.get("result",{}).get("list") or []
-    if not lst: return 0.0
-    v = lst[0].get("unrealisedPnl")
-    if v in ("", None): return 0.0
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return 0.0
-
-def get_ROE(symbol):
-    base="https://api.bybit.com"; api_key=_api_key.strip(); api_secret=_api_secret.strip(); s=str(symbol).strip().upper()
-    ts=str(int(time.time()*1000)); recv="30000"
-    params={"category":"linear","symbol":s}; qs="&".join(f"{k}={params[k]}" for k in sorted(params))
-    sign=hmac.new(api_secret.encode(),(ts+api_key+recv+qs).encode(),hashlib.sha256).hexdigest()
-    headers={"X-BAPI-API-KEY":api_key,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":recv,"X-BAPI-SIGN":sign,"X-BAPI-SIGN-TYPE":"2"}
-    d=requests.get(f"{base}/v5/position/list?{qs}",headers=headers,timeout=10).json()
-    if d.get("retCode")!=0: raise RuntimeError(f"position/list {d.get('retCode')} {d.get('retMsg')}")
-    lst=d.get("result",{}).get("list") or []
-    if not lst: return 0.0
-    pos=lst[0]
-    unreal=get_PnL(symbol)
-    im = pos.get("positionIM")
-    if im in ("", None): return 0.0
-    try:
-        position_im=float(im)
-    except (TypeError, ValueError):
-        position_im=0.0
-    return (unreal/position_im*100) if position_im>0 else 0.0
-
-
-def get_RSI(symbol, interval, period=14):
-    closes=[float(k[4]) for k in get_kline(symbol, interval)]
-    series=pd.Series(closes); delta=series.diff()
-    up=delta.clip(lower=0); down=-delta.clip(upper=0)
-    avg_gain=up.ewm(alpha=1/period,adjust=False).mean()
-    avg_loss=down.ewm(alpha=1/period,adjust=False).mean()
-    rs=avg_gain/avg_loss.replace(0,1e-10); rsi=100-(100/(1+rs))
-    return float(rsi.iloc[-1])
-
-def get_current_price(symbol, timeout=10):
-    s=str(symbol).strip().upper()
-    params={"category":"linear","symbol":s}
-    r=requests.get(f"{BYBIT_BASE}/v5/market/tickers",params=params,timeout=timeout).json()
-    lst=r.get("result",{}).get("list") or []
-    if not lst:
-        params={"category":"spot","symbol":s}
-        r=requests.get(f"{BYBIT_BASE}/v5/market/tickers",params=params,timeout=timeout).json()
-        lst=r.get("result",{}).get("list") or []
-        if not lst: raise RuntimeError(f"/v5/market/tickers empty for {s}: {r}")
-    return float(lst[0]["lastPrice"])
-
-def get_position_size(symbol):
-    base="https://api.bybit.com"; api_key=_api_key.strip(); api_secret=_api_secret.strip(); s=str(symbol).strip().upper()
-    ts=str(int(requests.get(base+"/v5/market/time",timeout=5).json()["result"]["timeSecond"])*1000); recv="10000"
-    params={"category":"linear","symbol":s}; qs="&".join(f"{k}={params[k]}" for k in sorted(params))
-    sign=hmac.new(api_secret.encode(),(ts+api_key+recv+qs).encode(),hashlib.sha256).hexdigest()
-    headers={"X-BAPI-API-KEY":api_key,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":recv,"X-BAPI-SIGN":sign,"X-BAPI-SIGN-TYPE":"2"}
-    
-    d = requests.get(base+"/v5/position/list?"+qs, headers=headers, timeout=10).json()
-    lst = d.get("result",{}).get("list") or []
-    return 0.0 if not lst else float(lst[0].get("size","0") or 0.0)  # 소수 유지
-
-
-def get_close_price(symbol, interval):
-    kl=get_kline_http(symbol, interval, limit=3)
-    return [float(k[4]) for k in kl]  # [2~3바 전, 1~2바 전, 진행중]
-
-
-
-def get_lot_size(symbol: str):
-    """심볼별 최소수량/스텝 조회 (선물 Linear)"""
-    r = requests.get(
-        f"{BYBIT_BASE}/v5/market/instruments-info",
-        params={"category": "linear", "symbol": str(symbol).upper()},
-        timeout=10
-    ).json()
-    if r.get("retCode") != 0 or not r.get("result", {}).get("list"):
-        raise RuntimeError(f"instruments-info {r.get('retCode')} {r.get('retMsg')}")
-    lot = r["result"]["list"][0]["lotSizeFilter"]
-    min_qty = float(lot["minOrderQty"])
-    step    = float(lot["qtyStep"])
-    return min_qty, step
-
-def quantize_qty(qty: float, step: float) -> float:
-    """qty를 step의 배수로 내림 정규화"""
-    q = Decimal(str(qty))
-    s = Decimal(str(step))
-    return float((q // s) * s)
-
-def entry_position(symbol, leverage, side):
-    base = "https://api.bybit.com"
-    api_key = _api_key.strip()
-    api_secret = _api_secret.strip()
-
-    # ① 심볼별 최소/스텝 가져와서
-    try:
-        min_qty, step = get_lot_size(symbol)
-    except Exception as e:
-        print(f"📛[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} lotInfo 실패: {e}")
-        return None, 0
-
-    # ② 가용증거금 기준 원시 수량 계산
-    avail = get_usdt()
-    price = get_current_price(symbol)
-    raw_qty = (avail * (PCT/100) * int(leverage)) / price
-
-    # ③ 스텝에 맞춰 내림 정규화
-    adj_qty = quantize_qty(raw_qty, step)
-
-    # ④ 최소수량 미만이면 주문 불가
-    if adj_qty < min_qty:
-        print(
-            f"📛[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 수량 부족: "
-            f"raw={raw_qty:.8f} → adj={adj_qty:.8f}, min={min_qty}, step={step}"
-        )
-        return None, 0
-
-    ts = str(int(requests.get(base + "/v5/market/time", timeout=5).json()["result"]["timeSecond"]) * 1000)
-    recv = "10000"
-    body = {
-        "category": "linear",
-        "symbol": str(symbol).strip().upper(),
-        "orderType": "Market",
-        "qty": str(adj_qty),       # ← 심볼 규칙에 맞춘 수량
-        "isLeverage": 1,
-        "side": side,
-        "reduceOnly": False
-    }
-    payload = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
-    sign = hmac.new(api_secret.encode(), (ts + api_key + recv + payload).encode(), hashlib.sha256).hexdigest()
-    headers = {
-        "X-BAPI-API-KEY": api_key,
-        "X-BAPI-TIMESTAMP": ts,
-        "X-BAPI-RECV-WINDOW": recv,
-        "X-BAPI-SIGN": sign,
-        "X-BAPI-SIGN-TYPE": "2",
-        "Content-Type": "application/json",
-    }
-    resp = requests.post(base + "/v5/order/create", data=payload, headers=headers, timeout=10).json()
-    if resp.get("retCode") != 0:
-        print(
-            f"📛[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 주문 실패: "
-            f"{resp.get('retCode')} {resp.get('retMsg')} | qty={adj_qty} (min={min_qty}, step={step})"
-        )
-        return None, 0
-
-    print(
-        f"💡[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 진입 / 수량 {adj_qty} ({side})"
-        f" | avail={avail:.2f} price={price:.6f} lev={leverage}"
-    )
-    return price, adj_qty
-
-
-def close_position(symbol, side):
-    qty=get_position_size(symbol=symbol)
-    if qty<=0: print("📍 닫을 포지션 없음"); return
-    current_price=get_current_price(symbol); ep=entry_px.get(symbol)
-    if ep:
-        profit_pct=((current_price-ep)/ep*100) if side=="Sell" else ((ep-current_price)/ep*100)
+def kline_list_to_df(kl):
+    if not kl:
+        return pd.DataFrame(columns=["ts","open","high","low","close","volume"])
+    if isinstance(kl[0], (list, tuple)):
+        df = pd.DataFrame(kl)
+        if df.shape[1] < 6:
+            raise ValueError(f"kline columns < 6: got {df.shape[1]}")
+        df = df.iloc[:, :6].copy()
+        df.columns = ["ts","open","high","low","close","volume"]
+    elif isinstance(kl[0], dict):
+        df = pd.DataFrame(kl).copy()
+        if "start" in df.columns: df.rename(columns={"start":"ts"}, inplace=True)
+        if "startTime" in df.columns: df.rename(columns={"startTime":"ts"}, inplace=True)
+        need = ["ts","open","high","low","close","volume"]
+        missing = [c for c in need if c not in df.columns]
+        if missing:
+            raise ValueError(f"missing keys in kline dict: {missing}")
+        df = df[need].copy()
     else:
-        profit_pct=0.0
-    base="https://api.bybit.com"; api_key=_api_key.strip(); api_secret=_api_secret.strip()
-    ts=str(int(requests.get(base+"/v5/market/time",timeout=5).json()["result"]["timeSecond"])*1000); recv="10000"
-    body={"category":"linear","symbol":str(symbol).strip().upper(),"orderType":"Market","side":side,"reduceOnly":True,"isLeverage":1,"qty":str(qty)}
-    payload=json.dumps(body,separators=(",",":"),ensure_ascii=False)
-    sign=hmac.new(api_secret.encode(),(ts+api_key+recv+payload).encode(),hashlib.sha256).hexdigest()
-    headers={"X-BAPI-API-KEY":api_key,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":recv,"X-BAPI-SIGN":sign,"X-BAPI-SIGN-TYPE":"2","Content-Type":"application/json"}
-    requests.post(base+"/v5/order/create",data=payload,headers=headers,timeout=10).json()
-    print(f"📍[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {symbol} 익절 / 수량 {qty} / 💹 수익률 {profit_pct:.2f}%")
+        raise TypeError(f"unexpected kline row type: {type(kl[0])}")
+    df["ts"] = pd.to_numeric(df["ts"], errors="coerce")
+    for c in ["open","high","low","close","volume"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df.dropna(subset=["ts","open","high","low","close"], inplace=True)
+    df.sort_values("ts", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
 
+def compute_stoch(df, period:int, k_smooth:int, d_smooth:int):
+    low_min  = df["low"].rolling(period).min()
+    high_max = df["high"].rolling(period).max()
+    df["%K_raw"] = 100 * (df["close"] - low_min) / (high_max - low_min + 1e-9)
+    df["%K"] = df["%K_raw"].rolling(k_smooth).mean()
+    df["%D"] = df["%K"].rolling(d_smooth).mean()
+    return df.dropna()
 
-# 테스트 전용
+def get_stoch(symbol, interval, period, k_smooth, d_smooth):
+    kl = get_kline_http(symbol, interval, limit=50)
+    df = kline_list_to_df(kl)
+    df = compute_stoch(df, period, k_smooth, d_smooth)
+    # 직전/현재 값 반환
+    return float(df["%K"].iloc[-2]), float(df["%D"].iloc[-2]), float(df["%K"].iloc[-1]), float(df["%D"].iloc[-1])
+
+# ================= 실행 =================
+print(f"보유 USDT: {get_usdt():.2f}")
+
+for i, s in enumerate(SYMBOLS):
+    set_leverage(s, LEVERAGE_ARR[i])
+
+while True:
+    try:
+        for i, sym in enumerate(SYMBOLS):
+            tf       = TIMEFRAMES[i]
+            period   = STOCH_PERIODS[i]
+            ks       = K_SMOOTH_ARR[i]
+            ds       = D_SMOOTH_ARR[i]
+            gap      = GAP_ARR[i]
+            tp_roe   = TP_ROE_ARR[i]
+            sl_roe   = SL_ROE_ARR[i]
+            lev      = LEVERAGE_ARR[i]
+            pct      = PCT_ARR[i]
+
+            # 실시간 값
+            k_prev, d_prev, k_now, d_now = get_stoch(sym, tf, period, ks, ds)
+            roe = get_ROE(sym)
+            pnl = get_PnL(sym)
+            pos_size = get_position_size(sym)
+            px = get_current_price(sym)
+
+            # === 진입 조건 ===
+            if pos_size == 0:
+                bybit.PCT = pct
+                # 숏 진입: K↓D 교차 + (K-D)≥gap + K>80
+                if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap) and (k_now > 80):
+                    print(f"📉 [{sym}] 숏 진입 | K={k_now:.2f} D={d_now:.2f}")
+                    entry_px[sym], qty = entry_position(sym, lev, "Sell")
+                    open_positions[sym] = "SHORT"
+
+                # 롱 진입: K↑D 교차 + (D-K)≥gap + K<20
+                elif (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap) and (k_now < 20):
+                    print(f"📈 [{sym}] 롱 진입 | K={k_now:.2f} D={d_now:.2f}")
+                    entry_px[sym], qty = entry_position(sym, lev, "Buy")
+                    open_positions[sym] = "LONG"
+
+            else:
+                # === 청산 조건 (TP/SL + 반대 크로스+반대 과상태) ===
+                opp_close = False
+                opp_reason = ""
+
+                if open_positions[sym] == "LONG":
+                    crossed_down = (k_prev > d_prev) and (k_now < d_now)   # K↓D
+                    overbought   = max(k_prev, d_prev, k_now, d_now) >= 80
+                    if crossed_down and overbought:
+                        opp_close = True
+                        opp_reason = f"OppX K↓D@80+ (K={k_now:.2f}, D={d_now:.2f})"
+
+                elif open_positions[sym] == "SHORT":
+                    crossed_up = (k_prev < d_prev) and (k_now > d_now)     # K↑D
+                    oversold   = min(k_prev, d_prev, k_now, d_now) <= 20
+                    if crossed_up and oversold:
+                        opp_close = True
+                        opp_reason = f"OppX K↑D@20- (K={k_now:.2f}, D={d_now:.2f})"
+
+                if roe >= tp_roe:
+                    print(f"💰 [{sym}] TP 도달 (ROE={roe:.2f}%) → 포지션 종료")
+                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
+                    close_position(sym, side)
+                    open_positions[sym] = None
+                    entry_px[sym] = None
+
+                elif roe <= -sl_roe:
+                    print(f"🛑 [{sym}] SL 도달 (ROE={roe:.2f}%) → 포지션 종료")
+                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
+                    close_position(sym, side)
+                    open_positions[sym] = None
+                    entry_px[sym] = None
+
+                elif opp_close:
+                    print(f"🔄 [{sym}] {opp_reason} → 포지션 종료")
+                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
+                    close_position(sym, side)
+                    open_positions[sym] = None
+                    entry_px[sym] = None
+
+            # === 상태 출력 (항상) ===
+            pos_str = open_positions.get(sym) or "-"
+            print(
+                f"[{utc_now_str()}] 🪙{sym} @{tf} "
+                f"💲현재가: {px:.6f}  🚩포지션 {pos_str}  "
+                f"| ST%K/%D({period},{ks},{ds}) = {k_now:.2f}/{d_now:.2f} (prev {k_prev:.2f}/{d_prev:.2f}) "
+                f"| 💎PnL: {pnl:.6f} ⚜️ROE: {roe:.2f}%"
+            )
+
+        time.sleep(30)  # 30초 주기
+    except Exception as e:
+        print(f"⚠️ 오류 발생: {e}")
+        time.sleep(10)
