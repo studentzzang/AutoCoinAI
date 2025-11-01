@@ -113,9 +113,40 @@ while True:
                     open_positions[sym] = "LONG"
 
             else:
-                # === 청산 조건 (TP/SL) ===
-                if roe >= tp_roe or roe <= -sl_roe:
-                    print(f"💰 [{sym}] TP/SL 도달 (ROE={roe:.2f}%) → 포지션 종료")
+                # === 청산 조건 (TP/SL + 반대 크로스+반대 과상태) ===
+                opp_close = False
+                opp_reason = ""
+
+                if open_positions[sym] == "LONG":
+                    crossed_down = (k_prev > d_prev) and (k_now < d_now)   # K↓D
+                    overbought   = max(k_prev, d_prev, k_now, d_now) >= 80
+                    if crossed_down and overbought:
+                        opp_close = True
+                        opp_reason = f"OppX K↓D@80+ (K={k_now:.2f}, D={d_now:.2f})"
+
+                elif open_positions[sym] == "SHORT":
+                    crossed_up = (k_prev < d_prev) and (k_now > d_now)     # K↑D
+                    oversold   = min(k_prev, d_prev, k_now, d_now) <= 20
+                    if crossed_up and oversold:
+                        opp_close = True
+                        opp_reason = f"OppX K↑D@20- (K={k_now:.2f}, D={d_now:.2f})"
+
+                if roe >= tp_roe:
+                    print(f"💰 [{sym}] TP 도달 (ROE={roe:.2f}%) → 포지션 종료")
+                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
+                    close_position(sym, side)
+                    open_positions[sym] = None
+                    entry_px[sym] = None
+
+                elif roe <= -sl_roe:
+                    print(f"🛑 [{sym}] SL 도달 (ROE={roe:.2f}%) → 포지션 종료")
+                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
+                    close_position(sym, side)
+                    open_positions[sym] = None
+                    entry_px[sym] = None
+
+                elif opp_close:
+                    print(f"🔄 [{sym}] {opp_reason} → 포지션 종료")
                     side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
                     close_position(sym, side)
                     open_positions[sym] = None
