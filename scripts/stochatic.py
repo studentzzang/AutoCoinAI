@@ -16,9 +16,11 @@ K_SMOOTH_ARR   = [5]
 D_SMOOTH_ARR   = [3]
 TP_ROE_ARR     = [15]
 SL_ROE_ARR     = [15]
-GAP_ARR        = [1]      # K-D 최소 차이(%) 조건
+GAP_ARR        = [1]      # K-D 최소 차이(%) 조건 (심볼별)
 LEVERAGE_ARR   = [5]
 PCT_ARR        = [50]     # ← 심볼 개수와 길이 맞춤
+
+WAIT_TIME = 15
 
 # ================= 전역상태 =================
 open_positions = {s: None for s in SYMBOLS}   # "LONG"/"SHORT"/None
@@ -101,36 +103,22 @@ while True:
             if pos_size == 0:
                 bybit.PCT = pct
                 # 숏 진입: K↓D 교차 + (K-D)≥gap + K>80
-                if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap) and (k_now > 80):
+                if (k_prev > d_prev) and (k_now < d_now) and ((k_prev - d_prev) >= gap) and (k_now > 80):
                     print(f"📉 [{sym}] 숏 진입 | K={k_now:.2f} D={d_now:.2f}")
                     entry_px[sym], qty = entry_position(sym, lev, "Sell")
                     open_positions[sym] = "SHORT"
 
                 # 롱 진입: K↑D 교차 + (D-K)≥gap + K<20
-                elif (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap) and (k_now < 20):
+                elif (k_prev < d_prev) and (k_now > d_now) and ((d_prev - k_prev) >= gap) and (k_now < 20):
                     print(f"📈 [{sym}] 롱 진입 | K={k_now:.2f} D={d_now:.2f}")
                     entry_px[sym], qty = entry_position(sym, lev, "Buy")
                     open_positions[sym] = "LONG"
 
             else:
-                # === 청산 조건 (TP/SL + 반대 크로스+반대 과상태) ===
-                opp_close = False
-                opp_reason = ""
+                # === 청산/뒤집기 조건 ===
+                flipped = False
 
-                if open_positions[sym] == "LONG":
-                    crossed_down = (k_prev > d_prev) and (k_now < d_now)   # K↓D
-                    overbought   = max(k_prev, d_prev, k_now, d_now) >= 80
-                    if crossed_down and overbought:
-                        opp_close = True
-                        opp_reason = f"OppX K↓D@80+ (K={k_now:.2f}, D={d_now:.2f})"
-
-                elif open_positions[sym] == "SHORT":
-                    crossed_up = (k_prev < d_prev) and (k_now > d_now)     # K↑D
-                    oversold   = min(k_prev, d_prev, k_now, d_now) <= 20
-                    if crossed_up and oversold:
-                        opp_close = True
-                        opp_reason = f"OppX K↑D@20- (K={k_now:.2f}, D={d_now:.2f})"
-
+                # 1) TP/SL 우선
                 if roe >= tp_roe:
                     print(f"💰 [{sym}] TP 도달 (ROE={roe:.2f}%) → 포지션 종료")
                     side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
@@ -145,12 +133,39 @@ while True:
                     open_positions[sym] = None
                     entry_px[sym] = None
 
-                elif opp_close:
-                    print(f"🔄 [{sym}] {opp_reason} → 포지션 종료")
-                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
-                    close_position(sym, side)
-                    open_positions[sym] = None
-                    entry_px[sym] = None
+                else:
+                    # 2) 반대 시그널 나오면 즉시 청산 후 반대 진입 (GAP 반영)
+                    if open_positions[sym] == "LONG":
+                        crossed_down = (k_prev > d_prev) and (k_now < d_now)   # K↓D
+                        gap_ok       = (k_prev - d_prev) >= gap
+                        overbought   = (k_now > 80)
+                        if crossed_down and gap_ok and overbought:
+                            print(f"🔄 [{sym}] LONG → 반대 시그널(K↓D@80+, gap≥{gap}) → 청산 후 숏 진입")
+                            # 청산
+                            close_position(sym, "Sell")
+                            # 바로 반대 진입
+                            bybit.PCT = pct
+                            entry_px[sym], qty = entry_position(sym, lev, "Sell")
+                            open_positions[sym] = "SHORT"
+                            flipped = True
+
+                    elif open_positions[sym] == "SHORT":
+                        crossed_up = (k_prev < d_prev) and (k_now > d_now)     # K↑D
+                        gap_ok     = (d_prev - k_prev) >= gap
+                        oversold   = (k_now < 20)
+                        if crossed_up and gap_ok and oversold:
+                            print(f"🔄 [{sym}] SHORT → 반대 시그널(K↑D@20-, gap≥{gap}) → 청산 후 롱 진입")
+                            # 청산
+                            close_position(sym, "Buy")
+                            # 바로 반대 진입
+                            bybit.PCT = pct
+                            entry_px[sym], qty = entry_position(sym, lev, "Buy")
+                            open_positions[sym] = "LONG"
+                            flipped = True
+
+                    # 뒤집기/청산 없었다면 유지
+                    if not flipped:
+                        pass
 
             # === 상태 출력 (항상) ===
             pos_str = open_positions.get(sym) or "-"
@@ -161,7 +176,7 @@ while True:
                 f"| 💎PnL: {pnl:.6f} ⚜️ROE: {roe:.2f}%"
             )
 
-        time.sleep(30)  # 30초 주기
+        time.sleep(WAIT_TIME)  # 30초 주기
     except Exception as e:
         print(f"⚠️ 오류 발생: {e}")
         time.sleep(10)
