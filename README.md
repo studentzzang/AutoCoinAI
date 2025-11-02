@@ -1,2 +1,35 @@
-# AutoCoinAI
-.
+# BybitAutoTradingFuture
+### – Futures Trading Bot (Bybit API)
+
+자동으로 선물 코인 거래를 수행하는 트레이딩 시스템입니다.  
+**Bybit API**를 사용하여 실시간 데이터로 거래를 실행하며,  
+별도의 **백테스트 모듈**을 통해 전략을 과거 데이터로 검증할 수 있습니다.
+
+---
+
+## 🧭 프로젝트 개요
+이 프로젝트는 선물 거래의 효율성을 높이기 위해 제작된 **자동 매매 프로그램** 및 **가장 효율적인 자동 매매법 고안 방법**
+EMA, RSI, Stochastic 등 다양한 기술적 지표를 활용하여  
+실시간으로 진입·청산 신호를 감지하고, **지정된 ROE(%) 기준으로 TP/SL**을 수행
+---
+
+## ⚙️ 주요 기능
+
+### 💹 실시간 자동 거래 (Bybit API 기반)
+- Bybit Unified Trading API를 이용해 실시간 가격 및 포지션 관리  
+- 스토캐스틱(K, D) 교차 기반 자동 진입 / 청산 / 반대포지션 전환 (Flip)  
+- TP(익절) / SL(손절) 자동 처리  
+- 심볼, 타임프레임, 레버리지, GAP 등 세부 설정 가능  
+
+### 📊 백테스트 시스템
+- 다수의 CSV 거래 결과를 자동으로 저장 및 집계  
+- **Jupyter Notebook**을 이용해 손쉽게 분석 (PnL, 승률, 최대손실 등 시각화 가능)  
+- 다양한 파라미터(EMA, RSI, TP/SL 등) 조합 테스트 가능  
+
+---
+
+## 🧠 기술 스택
+- **Python 3.11+**
+- **pandas**, **numpy**
+- **pybit (Bybit Unified Trading API)**
+- **Jupyter Notebook** (백테스트 분석용)
