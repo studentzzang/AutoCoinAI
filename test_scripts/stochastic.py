@@ -7,16 +7,20 @@ from pybit.unified_trading import HTTP
 
 # ================= 사용자 설정 =================
 OUT_DIR        = r"d:\Projects\AutoCoinAI\test"
-SYMBOLS        = ["ETHUSDT", "PUMPFUNUSDT"]
+SYMBOLS        = ["PUMPFUNUSDT"]
 TIMEFRAMES     = ["5", "15","30"]
 
-STOCH_PERIODS  = [9,14, 20]
+STOCH_PERIODS  = [7, 9,14, 20]
 K_SMOOTH_ARR   = [3,5]
 D_SMOOTH_ARR   = [3,5]
 N_GAP_LIST     = [0, 1, 3, 5]   # % 차이 (K-D) 최소 갭 조건
 
-TP_ROE_ARR     = [7.5,10,15]
+TP_ROE_ARR     = [10,15]
 SL_ROE_ARR     = [10,15]
+
+STO_K_THRESH_ARR = [80,70, 0]  # 스토캐스틱 기준값 (%K), 0이면 조건 없음
+STO_D_THRESH_ARR = [20,30, 0]  # 스토캐스틱 기준값 (%K), 0이면 조건 없음
+
 
 EQUITY         = 100.0
 LEVERAGE       = 5
@@ -99,7 +103,7 @@ def compute_stoch(df, period:int, k_smooth:int, d_smooth:int):
     return df
 
 # ================= 백테스트 =================
-def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap):
+def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap, thresh_K, thresh_D):
     start_ms = parse_date(START); end_ms = parse_date(END)
     ohlc = fetch_ohlcv(symbol, tf, start_ms, end_ms, MAX_CANDLES)
     if ohlc.empty: 
@@ -123,63 +127,52 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap):
         k_now,  d_now  = ohlc.loc[i, "%K"], ohlc.loc[i, "%D"]
         px = ohlc.loc[i, "close"]
 
+        use_threshold = not (thresh_K == 0 and thresh_D == 0)
+
         # === 진입 조건 ===
         if position is None:
             # 숏 진입
-            if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap) and (k_now > 80):
-                position = "SHORT"
-                entry_px = px
-                qty = notional / px
-                continue
+            if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap):
+                if not use_threshold or k_now > thresh_K:
+                    position = "SHORT"
+                    entry_px = px
+                    qty = notional / px
+                    continue
+
             # 롱 진입
-            if (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap) and (k_now < 20):
-                position = "LONG"
-                entry_px = px
-                qty = notional / px
-                continue
+            if (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap):
+                if not use_threshold or k_now < thresh_D:
+                    position = "LONG"
+                    entry_px = px
+                    qty = notional / px
+                    continue
 
         # === 청산 조건 ===
         if position:
             pnl = (px - entry_px) * qty if position == "LONG" else (entry_px - px) * qty
             roe = (pnl / eq_used) * 100
 
-            # TP / SL
             if roe >= tp_roe or roe <= -sl_roe:
-                logs.append([
-                    dt, symbol, tf, period, gap, position,
-                    entry_px, px, pnl, roe, k_now, d_now
-                ])
-                position = None
-                entry_px = None
-                qty = None
+                logs.append([dt, symbol, tf, period, gap, position, entry_px, px, pnl, roe, k_now, d_now])
+                position = None; entry_px = None; qty = None
                 continue
 
-            # 반대 신호 청산
-            if position == "LONG" and (k_prev > d_prev) and (k_now < d_now) and (k_now > 80):
-                logs.append([
-                    dt, symbol, tf, period, gap, "LONG→EXIT",
-                    entry_px, px, pnl, roe, k_now, d_now
-                ])
-                position = None
-                entry_px = None
-                qty = None
-                continue
-            if position == "SHORT" and (k_prev < d_prev) and (k_now > d_now) and (k_now < 20):
-                logs.append([
-                    dt, symbol, tf, period, gap, "SHORT→EXIT",
-                    entry_px, px, pnl, roe, k_now, d_now
-                ])
-                position = None
-                entry_px = None
-                qty = None
-                continue
+            # 반대 신호 → 청산
+            if position == "LONG" and (k_prev > d_prev) and (k_now < d_now):
+                if not use_threshold or k_now > thresh_K:
+                    logs.append([dt, symbol, tf, period, gap, "LONG→EXIT", entry_px, px, pnl, roe, k_now, d_now])
+                    position = None; entry_px = None; qty = None
+                    continue
+            if position == "SHORT" and (k_prev < d_prev) and (k_now > d_now):
+                if not use_threshold or k_now < thresh_D:
+                    logs.append([dt, symbol, tf, period, gap, "SHORT→EXIT", entry_px, px, pnl, roe, k_now, d_now])
+                    position = None; entry_px = None; qty = None
+                    continue
 
-    # 🔹 %K, %D 실시간 값 포함 / k_smooth,d_smooth 제거
-    cols = [
-        "datetime", "symbol", "timeframe", "period", "gap%",
-        "position", "entry", "exit", "PnL", "ROE", "%K_now", "%D_now"
-    ]
-    return pd.DataFrame(logs, columns=cols)
+    return pd.DataFrame(logs, columns=[
+        "datetime", "symbol", "timeframe", "period", "gap%", "position",
+        "entry", "exit", "PnL", "ROE", "%K_now", "%D_now"
+    ])
 
 
 # ================= 실행 =================
@@ -194,9 +187,14 @@ if __name__ == "__main__":
                         for tp in TP_ROE_ARR:
                             for sl in SL_ROE_ARR:
                                 for gap in N_GAP_LIST:
-                                    print(f"▶ {s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl}")
-                                    df = backtest(s, tf, p, ks, ds, tp, sl, gap)
-                                    if df.empty: continue
-                                    fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}.csv"
-                                    df.to_csv(os.path.join(OUT_DIR,fname),index=False,encoding="utf-8-sig")
-                                    print(f"✅ Saved: {fname}")
+                                    for k_th in STO_K_THRESH_ARR:
+                                        for d_th in STO_D_THRESH_ARR:
+                                            label = f"{s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl} K{k_th} D{d_th}"
+                                            print(f"▶ {label}")
+                                            
+                                            df = backtest(s, tf, p, ks, ds, tp, sl, gap, k_th, d_th)
+                                            if df.empty: continue
+
+                                            fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}_K{k_th}_D{d_th}.csv"
+                                            df.to_csv(os.path.join(OUT_DIR, fname), index=False, encoding="utf-8-sig")
+                                            print(f"✅ Saved: {fname}")
