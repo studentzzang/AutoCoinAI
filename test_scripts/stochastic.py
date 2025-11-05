@@ -8,26 +8,25 @@ from pybit.unified_trading import HTTP
 # ================= 사용자 설정 =================
 OUT_DIR        = r"d:\Projects\AutoCoinAI\test"
 SYMBOLS        = ["PUMPFUNUSDT"]
-TIMEFRAMES     = ["5", "15","30"]
+TIMEFRAMES     = ["5"]
 
-STOCH_PERIODS  = [7, 9,14, 20]
-K_SMOOTH_ARR   = [3,5]
-D_SMOOTH_ARR   = [3,5]
-N_GAP_LIST     = [0, 1, 3, 5]   # % 차이 (K-D) 최소 갭 조건
+STOCH_PERIODS  = [7, 9, 14, 20]
+K_SMOOTH_ARR   = [3, 5]
+D_SMOOTH_ARR   = [3, 5]
+N_GAP_LIST     = [1, 3, 5]   # % 차이 (K-D) 최소 갭 조건
 
-TP_ROE_ARR     = [10,15]
-SL_ROE_ARR     = [10,15]
+TP_ROE_ARR     = [10, 15]
+SL_ROE_ARR     = [10, 15]
 
-STO_K_THRESH_ARR = [80,70, 0]  # 스토캐스틱 기준값 (%K), 0이면 조건 없음
-STO_D_THRESH_ARR = [20,30, 0]  # 스토캐스틱 기준값 (%K), 0이면 조건 없음
-
+STO_K_THRESH_ARR = [80, 70, 0]  
+STO_D_THRESH_ARR = [20, 30, 0]  
 
 EQUITY         = 100.0
 LEVERAGE       = 5
 START          = "2025-01-01"
 END            = None
-MAX_CANDLES    = 10000
-SLEEP_PER_REQ  = 0.2
+MAX_CANDLES    = 20000
+SLEEP_PER_REQ  = 0.11
 MAX_RETRY      = 3
 
 session = HTTP()
@@ -69,7 +68,6 @@ def fetch_ohlcv(symbol: str, tf: str, start_ms: Optional[int], end_ms: Optional[
             break
 
         for it in lst:
-            # 대응: timestamp 필드명이 다를 수 있음
             ts = int(it[0]) if isinstance(it, list) else int(it.get("start", it.get("startTime", 0)))
             o = float(it[1]) if isinstance(it, list) else float(it.get("open", 0))
             h = float(it[2]) if isinstance(it, list) else float(it.get("high", 0))
@@ -179,6 +177,9 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap, thresh
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
 
+    # 🔽 변경 포인트: zip으로 묶어서 같은 인덱스끼리만 실행
+    KD_PAIRS = list(zip(STO_K_THRESH_ARR, STO_D_THRESH_ARR))
+
     for s in SYMBOLS:
         for tf in TIMEFRAMES:
             for p in STOCH_PERIODS:
@@ -187,14 +188,14 @@ if __name__ == "__main__":
                         for tp in TP_ROE_ARR:
                             for sl in SL_ROE_ARR:
                                 for gap in N_GAP_LIST:
-                                    for k_th in STO_K_THRESH_ARR:
-                                        for d_th in STO_D_THRESH_ARR:
-                                            label = f"{s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl} K{k_th} D{d_th}"
-                                            print(f"▶ {label}")
-                                            
-                                            df = backtest(s, tf, p, ks, ds, tp, sl, gap, k_th, d_th)
-                                            if df.empty: continue
+                                    for (k_th, d_th) in KD_PAIRS:  # ← zip 적용
+                                        label = f"{s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl} K{k_th} D{d_th}"
+                                        print(f"▶ {label}")
+                                        
+                                        df = backtest(s, tf, p, ks, ds, tp, sl, gap, k_th, d_th)
+                                        if df.empty: 
+                                            continue
 
-                                            fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}_K{k_th}_D{d_th}.csv"
-                                            df.to_csv(os.path.join(OUT_DIR, fname), index=False, encoding="utf-8-sig")
-                                            print(f"✅ Saved: {fname}")
+                                        fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}_K{k_th}_D{d_th}.csv"
+                                        df.to_csv(os.path.join(OUT_DIR, fname), index=False, encoding="utf-8-sig")
+                                        print(f"✅ Saved: {fname}")
