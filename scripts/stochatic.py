@@ -10,18 +10,18 @@ from bybit import (
 
 # ================= 사용자 설정 =================
 SYMBOLS         = ["PUMPFUNUSDT"]
-TIMEFRAMES      = ["15"]
-STOCH_PERIODS   = [9]
+TIMEFRAMES      = ["5"]
+STOCH_PERIODS   = [7]
 K_SMOOTH_ARR    = [5]
 D_SMOOTH_ARR    = [3]
-TP_ROE_ARR      = [15]
-SL_ROE_ARR      = [15]
-GAP_ARR         = [1]     # K-D 최소 차이(%) 조건
+TP_ROE_ARR      = [10]
+SL_ROE_ARR      = [10]
+GAP_ARR         = [3]     # K-D 최소 차이(%) 조건
 LEVERAGE_ARR    = [5]
 PCT_ARR         = [50]
 OVERBOUGHT_ARR  = [80]    # 0이면 기준선 무시
 OVERSOLD_ARR    = [20]    # 0이면 기준선 무시
-WAIT_TIME       = 15      # 반복 주기 (초)
+WAIT_TIME       = 8      # 반복 주기 (초)
 
 # ================= 전역상태 =================
 open_positions = {s: None for s in SYMBOLS}   # "LONG"/"SHORT"/None
