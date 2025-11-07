@@ -10,13 +10,13 @@ from bybit import (
 
 # ================= 사용자 설정 =================
 SYMBOLS         = ["PUMPFUNUSDT"]
-TIMEFRAMES      = ["5"]
-STOCH_PERIODS   = [7]
+TIMEFRAMES      = ["15"]
+STOCH_PERIODS   = [9]
 K_SMOOTH_ARR    = [5]
 D_SMOOTH_ARR    = [3]
-TP_ROE_ARR      = [10]
-SL_ROE_ARR      = [10]
-GAP_ARR         = [3]     # K-D 최소 차이(%) 조건
+TP_ROE_ARR      = [15]
+SL_ROE_ARR      = [15]
+GAP_ARR         = [1]     # K-D 최소 차이(%) 조건
 LEVERAGE_ARR    = [5]
 PCT_ARR         = [50] 
 OVERBOUGHT_ARR  = [80]    # 0이면 기준선 무시
@@ -100,10 +100,56 @@ while True:
             pos_size = get_position_size(sym)
             px = get_current_price(sym)
 
-            # === 진입 조건 ===
-            if pos_size == 0:
-                bybit.PCT = pct
+            bybit.PCT = pct
+            flipped = False
+            closed_now = False
 
+            # === TP/SL 우선 ===
+            if pos_size > 0:
+                if roe >= tp_roe:
+                    print(f"💰 [{sym}] TP 도달 (ROE={roe:.2f}%) → 포지션 종료")
+                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
+                    close_position(sym, side)
+                    open_positions[sym] = None
+                    entry_px[sym] = None
+                    closed_now = True
+                    pos_size = 0  # 즉시 재진입 허용
+
+                elif roe <= -sl_roe:
+                    print(f"🛑 [{sym}] SL 도달 (ROE={roe:.2f}%) → 포지션 종료")
+                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
+                    close_position(sym, side)
+                    open_positions[sym] = None
+                    entry_px[sym] = None
+                    closed_now = True
+                    pos_size = 0  # 즉시 재진입 허용
+
+                else:
+                    # === 반대 시그널로 뒤집기 ===
+                    if open_positions[sym] == "LONG":
+                        crossed_down = (k_prev > d_prev) and (k_now < d_now)
+                        gap_ok = (k_prev - d_prev) >= gap
+                        if crossed_down and gap_ok:
+                            if overbought == 0 and oversold == 0 or k_now > overbought:
+                                print(f"🔄 [{sym}] LONG → 반대 시그널 → 숏 전환")
+                                close_position(sym, "Sell")
+                                entry_px[sym], qty = entry_position(sym, lev, "Sell")
+                                open_positions[sym] = "SHORT"
+                                flipped = True
+
+                    elif open_positions[sym] == "SHORT":
+                        crossed_up = (k_prev < d_prev) and (k_now > d_now)
+                        gap_ok = (d_prev - k_prev) >= gap
+                        if crossed_up and gap_ok:
+                            if overbought == 0 and oversold == 0 or k_now < oversold:
+                                print(f"🔄 [{sym}] SHORT → 반대 시그널 → 롱 전환")
+                                close_position(sym, "Buy")
+                                entry_px[sym], qty = entry_position(sym, lev, "Buy")
+                                open_positions[sym] = "LONG"
+                                flipped = True
+
+            # === 청산 직후 or 무포지션 상태일 때 재진입 ===
+            if pos_size == 0 and not flipped:
                 # 숏 진입 조건
                 if (k_prev > d_prev) and (k_now < d_now) and ((k_prev - d_prev) >= gap):
                     if overbought == 0 and oversold == 0:
@@ -125,49 +171,6 @@ while True:
                         print(f"📈 [{sym}] 롱 진입 | K={k_now:.2f} D={d_now:.2f}")
                         entry_px[sym], qty = entry_position(sym, lev, "Buy")
                         open_positions[sym] = "LONG"
-
-            else:
-                flipped = False
-                # 1) TP/SL 우선
-                if roe >= tp_roe:
-                    print(f"💰 [{sym}] TP 도달 (ROE={roe:.2f}%) → 포지션 종료")
-                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
-                    close_position(sym, side)
-                    open_positions[sym] = None
-                    entry_px[sym] = None
-
-                elif roe <= -sl_roe:
-                    print(f"🛑 [{sym}] SL 도달 (ROE={roe:.2f}%) → 포지션 종료")
-                    side = "Buy" if open_positions[sym] == "SHORT" else "Sell"
-                    close_position(sym, side)
-                    open_positions[sym] = None
-                    entry_px[sym] = None
-
-                else:
-                    # === 반대 시그널로 뒤집기 ===
-                    if open_positions[sym] == "LONG":
-                        crossed_down = (k_prev > d_prev) and (k_now < d_now)
-                        gap_ok = (k_prev - d_prev) >= gap
-                        if crossed_down and gap_ok:
-                            if overbought == 0 and oversold == 0 or k_now > overbought:
-                                print(f"🔄 [{sym}] LONG → 반대 시그널 → 숏 전환")
-                                close_position(sym, "Sell")
-                                bybit.PCT = pct
-                                entry_px[sym], qty = entry_position(sym, lev, "Sell")
-                                open_positions[sym] = "SHORT"
-                                flipped = True
-
-                    elif open_positions[sym] == "SHORT":
-                        crossed_up = (k_prev < d_prev) and (k_now > d_now)
-                        gap_ok = (d_prev - k_prev) >= gap
-                        if crossed_up and gap_ok:
-                            if overbought == 0 and oversold == 0 or k_now < oversold:
-                                print(f"🔄 [{sym}] SHORT → 반대 시그널 → 롱 전환")
-                                close_position(sym, "Buy")
-                                bybit.PCT = pct
-                                entry_px[sym], qty = entry_position(sym, lev, "Buy")
-                                open_positions[sym] = "LONG"
-                                flipped = True
 
             # === 상태 출력 ===
             pos_str = open_positions.get(sym) or "-"
