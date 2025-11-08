@@ -8,9 +8,9 @@ from pybit.unified_trading import HTTP
 # ================= 사용자 설정 =================
 OUT_DIR        = r"d:\Projects\AutoCoinAI\test"
 SYMBOLS        = ["PUMPFUNUSDT"]
-TIMEFRAMES     = ["30","60"]
+TIMEFRAMES     = ["30"]
 
-STOCH_PERIODS  = [5,7,9,12]
+STOCH_PERIODS  = [5,7,9]
 K_SMOOTH_ARR   = [3,5]
 D_SMOOTH_ARR   = [3,5]
 N_GAP_LIST     = [1,3,5]
@@ -18,17 +18,19 @@ N_GAP_LIST     = [1,3,5]
 TP_ROE_ARR     = [15,0]
 SL_ROE_ARR     = [15,0]
 
-STO_K_THRESH_ARR = [80,70,0]
-STO_D_THRESH_ARR = [20,30,0]
+#  과매수/과매도 기준값 (같은 인덱스끼리만 조합)
+STO_OVERBOUGHT_ARR = [80,70,0]
+STO_OVERSOLD_ARR   = [20,30,0]
 
-USE_STRICT_THRESH = [True, False]   # ⭐ 상/하한선 먼저 터치해야만 진입
-K_ONLY_OK         = [True, False]   # ⭐ strict일 때만 작동 — K만 반등해도 진입 허용
+USE_STRICT_THRESH = [True, False]   # 상/하한선 먼저 터치해야만 진입
+K_ONLY_OK         = [True, False]   #  strict일 때만 작동 — K만 반등해도 진입 허용
+USE_CROSS_STOPLOSS_ARR = [True, False]  #  반대 크로스 손절 사용 여부
 
 EQUITY         = 100.0
 LEVERAGE       = 5
 START          = "2025-01-01"
 END            = None
-MAX_CANDLES    = 10000
+MAX_CANDLES    = 30000
 SLEEP_PER_REQ  = 0.11
 MAX_RETRY      = 3
 
@@ -100,7 +102,7 @@ def compute_stoch(df, period:int, k_smooth:int, d_smooth:int):
 
 # ================= 백테스트 =================
 def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap,
-             thresh_K, thresh_D, use_strict, k_only_ok):   
+             overbought, oversold, use_strict, k_only_ok, use_cross_stoploss):   
     start_ms = parse_date(START); end_ms = parse_date(END)
     ohlc = fetch_ohlcv(symbol, tf, start_ms, end_ms, MAX_CANDLES)
     if ohlc.empty: return pd.DataFrame()
@@ -126,48 +128,55 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap,
         k_now,  d_now  = ohlc.loc[i, "%K"],  ohlc.loc[i, "%D"]
         px = ohlc.loc[i, "close"]
 
-        # ⭐ strict일 때만 K/D 임계선 터치 체크
+        # strict 조건일 때 상/하한 터치 체크
         if use_strict:
-            if thresh_K and ((k_only_ok and k_now >= thresh_K) or (not k_only_ok and k_now >= thresh_K and d_now >= thresh_K)):
+            if overbought and ((k_only_ok and k_now >= overbought) or (not k_only_ok and k_now >= overbought and d_now >= overbought)):
                 touched_upper = True
-            if thresh_D and ((k_only_ok and k_now <= thresh_D) or (not k_only_ok and k_now <= thresh_D and d_now <= thresh_D)):
+            if oversold and ((k_only_ok and k_now <= oversold) or (not k_only_ok and k_now <= oversold and d_now <= oversold)):
                 touched_lower = True
 
-        # === 진입 조건 ===
+        # === 진입 ===
         if position is None:
-            # ⭐ 숏 진입
+            # 숏 진입
             if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap):
-                cond_now = (k_now > thresh_K) and (d_now > thresh_K)   # ⭐ strict=False면 항상 둘 다 기준
+                cond_now = (k_now > overbought) and (d_now > overbought)
                 if use_strict:
-                    cond_now = (k_now > thresh_K) if k_only_ok else ((k_now > thresh_K) and (d_now > thresh_K))
+                    cond_now = (k_now > overbought) if k_only_ok else ((k_now > overbought) and (d_now > overbought))
                 if cond_now and ((not use_strict) or touched_upper):
                     position = "SHORT"; entry_px = px; qty = notional / px
-                    touched_upper = False
-                    continue
+                    touched_upper = False; continue
 
-            # ⭐ 롱 진입
+            # 롱 진입
             if (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap):
-                cond_now = (k_now < thresh_D) and (d_now < thresh_D)   # ⭐ strict=False면 항상 둘 다 기준
+                cond_now = (k_now < oversold) and (d_now < oversold)
                 if use_strict:
-                    cond_now = (k_now < thresh_D) if k_only_ok else ((k_now < thresh_D) and (d_now < thresh_D))
+                    cond_now = (k_now < oversold) if k_only_ok else ((k_now < oversold) and (d_now < oversold))
                 if cond_now and ((not use_strict) or touched_lower):
                     position = "LONG"; entry_px = px; qty = notional / px
-                    touched_lower = False
-                    continue
+                    touched_lower = False; continue
 
-        # === 청산 조건 ===
+        # === 청산 ===
         if position:
             pnl = (px - entry_px) * qty if position == "LONG" else (entry_px - px) * qty
             roe = (pnl / eq_used) * 100
             hit_tp = (tp_roe > 0 and roe >= tp_roe)
             hit_sl = (sl_roe > 0 and roe <= -sl_roe)
+
             if hit_tp or hit_sl:
                 logs.append([dt, symbol, tf, period, gap, f"{position}→{'TP' if hit_tp else 'SL'}",
                              entry_px, px, pnl, roe, k_now, d_now])
-                position = None; entry_px = None; qty = None
-                continue
+                position = None; entry_px = None; qty = None; continue
 
-            # ⭐ 반대 교차 시 청산
+            # 반대 크로스 손절 옵션 적용
+            if use_cross_stoploss:
+                if position == "LONG" and (k_prev > d_prev) and (k_now < d_now) and (d_prev - k_prev >= gap):
+                    logs.append([dt, symbol, tf, period, gap, "LONG→CrossSL", entry_px, px, pnl, roe, k_now, d_now])
+                    position = None; entry_px = None; qty = None; continue
+                if position == "SHORT" and (k_prev < d_prev) and (k_now > d_now) and (k_prev - d_prev >= gap):
+                    logs.append([dt, symbol, tf, period, gap, "SHORT→CrossSL", entry_px, px, pnl, roe, k_now, d_now])
+                    position = None; entry_px = None; qty = None; continue
+
+            # 반대 교차 시 청산 (기본 EXIT)
             if position == "LONG" and (k_prev > d_prev) and (k_now < d_now):
                 logs.append([dt, symbol, tf, period, gap, "LONG→EXIT", entry_px, px, pnl, roe, k_now, d_now])
                 position = None; entry_px = None; qty = None; continue
@@ -183,7 +192,7 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap,
 # ================= 실행 =================
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
-    KD_PAIRS = list(zip(STO_K_THRESH_ARR, STO_D_THRESH_ARR))
+    THRESH_PAIRS = list(zip(STO_OVERBOUGHT_ARR, STO_OVERSOLD_ARR))  # 인덱스 동일 조합만 실행
 
     for s in SYMBOLS:
         for tf in TIMEFRAMES:
@@ -193,13 +202,15 @@ if __name__ == "__main__":
                         for tp in TP_ROE_ARR:
                             for sl in SL_ROE_ARR:
                                 for gap in N_GAP_LIST:
-                                    for (k_th, d_th) in KD_PAIRS:
+                                    for (overbought, oversold) in THRESH_PAIRS:
                                         for use_strict in USE_STRICT_THRESH:
                                             for k_only_ok in K_ONLY_OK:
-                                                label = f"{s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl} K{k_th} D{d_th} strict{use_strict} Konly{k_only_ok}"
-                                                print(f"▶ {label}")
-                                                df = backtest(s, tf, p, ks, ds, tp, sl, gap, k_th, d_th, use_strict, k_only_ok)
-                                                if df.empty: continue
-                                                fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}_K{k_th}_D{d_th}_strict{use_strict}_Konly{k_only_ok}.csv"
-                                                df.to_csv(os.path.join(OUT_DIR, fname), index=False, encoding="utf-8-sig")
-                                                print(f"✅ Saved: {fname}")
+                                                for use_cross_sl in USE_CROSS_STOPLOSS_ARR:
+                                                    label = f"{s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl} OB{overbought} OS{oversold} strict{use_strict} Konly{k_only_ok} CrossSL{use_cross_sl}"
+                                                    print(f"▶ {label}")
+                                                    df = backtest(s, tf, p, ks, ds, tp, sl, gap,
+                                                                  overbought, oversold, use_strict, k_only_ok, use_cross_sl)
+                                                    if df.empty: continue
+                                                    fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}_OB{overbought}_OS{oversold}_strict{use_strict}_Konly{k_only_ok}_CrossSL{use_cross_sl}.csv"
+                                                    df.to_csv(os.path.join(OUT_DIR, fname), index=False, encoding="utf-8-sig")
+                                                    print(f"✅ Saved: {fname}")
