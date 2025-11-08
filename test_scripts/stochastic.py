@@ -8,18 +8,19 @@ from pybit.unified_trading import HTTP
 # ================= 사용자 설정 =================
 OUT_DIR        = r"d:\Projects\AutoCoinAI\test"
 SYMBOLS        = ["PUMPFUNUSDT"]
-TIMEFRAMES     = ["5"]
+TIMEFRAMES     = ["3","5","15"]
 
-STOCH_PERIODS  = [7, 9, 14, 20]
-K_SMOOTH_ARR   = [3, 5]
-D_SMOOTH_ARR   = [3, 5]
-N_GAP_LIST     = [1, 3, 5]   # % 차이 (K-D) 최소 갭 조건
+STOCH_PERIODS  = [7,9,14,20]
+K_SMOOTH_ARR   = [3,5]
+D_SMOOTH_ARR   = [3,5]
+N_GAP_LIST     = [1,3,5]   # % 차이 (K-D) 최소 갭 조건
 
-TP_ROE_ARR     = [10, 15]
-SL_ROE_ARR     = [10, 15]
+TP_ROE_ARR     = [15,0]
+SL_ROE_ARR     = [15,0]
 
-STO_K_THRESH_ARR = [80, 70, 0]  
-STO_D_THRESH_ARR = [20, 30, 0]  
+STO_K_THRESH_ARR = [80,70,0]  
+STO_D_THRESH_ARR = [20,30,0]  
+USE_STRICT_THRESH = [True, False] # k선만 thresh 돌파해도 ㅇㅋ인지 
 
 EQUITY         = 100.0
 LEVERAGE       = 5
@@ -132,6 +133,11 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap, thresh
             # 숏 진입
             if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap):
                 if not use_threshold or k_now > thresh_K:
+                    
+                    # ★ 상한선 진입 확인 로직 추가
+                    if use_strict and ohlc["%K"].iloc[max(0, i-10):i].max() < thresh_K:
+                        continue  # 최근에 한 번도 상한선 닿은 적 없음 → 진입 X
+                    
                     position = "SHORT"
                     entry_px = px
                     qty = notional / px
@@ -140,32 +146,17 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap, thresh
             # 롱 진입
             if (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap):
                 if not use_threshold or k_now < thresh_D:
+                    
+                    # ★ 하한선 진입 확인 로직 추가
+                    if use_strict and ohlc["%K"].iloc[max(0, i-10):i].min() > thresh_D:
+                        continue  # 최근에 한 번도 하한선 닿은 적 없음 → 진입 X
+
                     position = "LONG"
                     entry_px = px
                     qty = notional / px
                     continue
 
-        # === 청산 조건 ===
-        if position:
-            pnl = (px - entry_px) * qty if position == "LONG" else (entry_px - px) * qty
-            roe = (pnl / eq_used) * 100
 
-            if roe >= tp_roe or roe <= -sl_roe:
-                logs.append([dt, symbol, tf, period, gap, position, entry_px, px, pnl, roe, k_now, d_now])
-                position = None; entry_px = None; qty = None
-                continue
-
-            # 반대 신호 → 청산
-            if position == "LONG" and (k_prev > d_prev) and (k_now < d_now):
-                if not use_threshold or k_now > thresh_K:
-                    logs.append([dt, symbol, tf, period, gap, "LONG→EXIT", entry_px, px, pnl, roe, k_now, d_now])
-                    position = None; entry_px = None; qty = None
-                    continue
-            if position == "SHORT" and (k_prev < d_prev) and (k_now > d_now):
-                if not use_threshold or k_now < thresh_D:
-                    logs.append([dt, symbol, tf, period, gap, "SHORT→EXIT", entry_px, px, pnl, roe, k_now, d_now])
-                    position = None; entry_px = None; qty = None
-                    continue
 
     return pd.DataFrame(logs, columns=[
         "datetime", "symbol", "timeframe", "period", "gap%", "position",
