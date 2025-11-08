@@ -8,25 +8,27 @@ from pybit.unified_trading import HTTP
 # ================= 사용자 설정 =================
 OUT_DIR        = r"d:\Projects\AutoCoinAI\test"
 SYMBOLS        = ["PUMPFUNUSDT"]
-TIMEFRAMES     = ["3","5","15"]
+TIMEFRAMES     = ["30","60"]
 
-STOCH_PERIODS  = [7,9,14,20]
+STOCH_PERIODS  = [5,7,9,12]
 K_SMOOTH_ARR   = [3,5]
 D_SMOOTH_ARR   = [3,5]
-N_GAP_LIST     = [1,3,5]   # % 차이 (K-D) 최소 갭 조건
+N_GAP_LIST     = [1,3,5]
 
 TP_ROE_ARR     = [15,0]
 SL_ROE_ARR     = [15,0]
 
-STO_K_THRESH_ARR = [80,70,0]  
-STO_D_THRESH_ARR = [20,30,0]  
-USE_STRICT_THRESH = [True, False] # k선만 thresh 돌파해도 ㅇㅋ인지 
+STO_K_THRESH_ARR = [80,70,0]
+STO_D_THRESH_ARR = [20,30,0]
+
+USE_STRICT_THRESH = [True, False]   #상/하한선 먼저 터치해야만 진입
+K_ONLY_OK         = [True, False]   #임계선 체크를 K만으로 인정할지 여부
 
 EQUITY         = 100.0
 LEVERAGE       = 5
 START          = "2025-01-01"
 END            = None
-MAX_CANDLES    = 20000
+MAX_CANDLES    = 10000
 SLEEP_PER_REQ  = 0.11
 MAX_RETRY      = 3
 
@@ -55,18 +57,15 @@ def fetch_ohlcv(symbol: str, tf: str, start_ms: Optional[int], end_ms: Optional[
             resp = session.get_kline(category="linear", symbol=symbol, interval=interval, end=cur_end, limit=1000)
         except Exception as e:
             print("API Error", e)
-            time.sleep(1)
-            continue
+            time.sleep(1); continue
 
         if resp.get("retCode") != 0:
-            print(f"❌ API Error {resp.get('retMsg')}")
-            break
+            print(f"❌ API Error {resp.get('retMsg')}"); break
 
         result = resp.get("result", {})
         lst = result.get("list", result.get("rows", []))
         if not lst:
-            print(f"[WARN] No kline data for {symbol} {tf}")
-            break
+            print(f"[WARN] No kline data for {symbol} {tf}"); break
 
         for it in lst:
             ts = int(it[0]) if isinstance(it, list) else int(it.get("start", it.get("startTime", 0)))
@@ -78,20 +77,18 @@ def fetch_ohlcv(symbol: str, tf: str, start_ms: Optional[int], end_ms: Optional[
             rows.append((ts, o, h, l, c, v))
 
         cur_end = min(r[0] for r in rows[-len(lst):]) - 1
-        if len(lst) < 1000:
-            break
+        if len(lst) < 1000: break
         time.sleep(SLEEP_PER_REQ)
 
     if not rows:
         print(f"[EMPTY] {symbol}@{tf}")
-        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+        return pd.DataFrame(columns=["ts","open","high","low","close","volume"])
 
-    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
+    df = pd.DataFrame(rows, columns=["ts","open","high","low","close","volume"])
     df.drop_duplicates("ts", inplace=True)
     df.sort_values("ts", inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df.tail(cap)
-
 
 def compute_stoch(df, period:int, k_smooth:int, d_smooth:int):
     low_min = df["low"].rolling(period).min()
@@ -102,11 +99,11 @@ def compute_stoch(df, period:int, k_smooth:int, d_smooth:int):
     return df
 
 # ================= 백테스트 =================
-def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap, thresh_K, thresh_D):
+def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap,
+             thresh_K, thresh_D, use_strict, k_only_ok):   # ⭐ strict만 남김
     start_ms = parse_date(START); end_ms = parse_date(END)
     ohlc = fetch_ohlcv(symbol, tf, start_ms, end_ms, MAX_CANDLES)
-    if ohlc.empty: 
-        return pd.DataFrame()
+    if ohlc.empty: return pd.DataFrame()
 
     ohlc = compute_stoch(ohlc, period, k_smooth, d_smooth)
     ohlc.dropna(inplace=True)
@@ -119,56 +116,71 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap, thresh
     eq_used = EQUITY
     logs = []
 
+    # ⭐ 상/하한 돌파 여부 기억
+    touched_upper = False
+    touched_lower = False
+
     for i in range(2, len(ohlc)):
         ts = int(ohlc.loc[i, "ts"]) // 1000
         dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         k_prev, d_prev = ohlc.loc[i-1, "%K"], ohlc.loc[i-1, "%D"]
-        k_now,  d_now  = ohlc.loc[i, "%K"], ohlc.loc[i, "%D"]
+        k_now,  d_now  = ohlc.loc[i, "%K"],  ohlc.loc[i, "%D"]
         px = ohlc.loc[i, "close"]
 
-        use_threshold = not (thresh_K == 0 and thresh_D == 0)
+        # ⭐ 임계선 돌파 감지
+        if thresh_K and k_now >= thresh_K:
+            touched_upper = True
+        if thresh_D and k_now <= thresh_D:
+            touched_lower = True
 
         # === 진입 조건 ===
         if position is None:
-            # 숏 진입
+            # ⭐ 숏 진입 조건
             if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap):
-                if not use_threshold or k_now > thresh_K:
-                    
-                    # ★ 상한선 진입 확인 로직 추가
-                    if use_strict and ohlc["%K"].iloc[max(0, i-10):i].max() < thresh_K:
-                        continue  # 최근에 한 번도 상한선 닿은 적 없음 → 진입 X
-                    
-                    position = "SHORT"
-                    entry_px = px
-                    qty = notional / px
-                    continue
+                cond_now = (k_now > thresh_K) if k_only_ok else ((k_now > thresh_K) and (d_now > thresh_K))
+                if cond_now:
+                    if (not use_strict) or touched_upper:  # ⭐ strict면 반드시 상한선 터치 후 내려와야 함
+                        position = "SHORT"; entry_px = px; qty = notional / px
+                        touched_upper = False  # ⭐ 초기화
+                        continue
 
-            # 롱 진입
+            # ⭐ 롱 진입 조건
             if (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap):
-                if not use_threshold or k_now < thresh_D:
-                    
-                    # ★ 하한선 진입 확인 로직 추가
-                    if use_strict and ohlc["%K"].iloc[max(0, i-10):i].min() > thresh_D:
-                        continue  # 최근에 한 번도 하한선 닿은 적 없음 → 진입 X
+                cond_now = (k_now < thresh_D) if k_only_ok else ((k_now < thresh_D) and (d_now < thresh_D))
+                if cond_now:
+                    if (not use_strict) or touched_lower:  # ⭐ strict면 반드시 하한선 터치 후 올라와야 함
+                        position = "LONG"; entry_px = px; qty = notional / px
+                        touched_lower = False
+                        continue
 
-                    position = "LONG"
-                    entry_px = px
-                    qty = notional / px
-                    continue
+        # === 청산 조건 ===
+        if position:
+            pnl = (px - entry_px) * qty if position == "LONG" else (entry_px - px) * qty
+            roe = (pnl / eq_used) * 100
+            hit_tp = (tp_roe > 0 and roe >= tp_roe)
+            hit_sl = (sl_roe > 0 and roe <= -sl_roe)
+            if hit_tp or hit_sl:
+                logs.append([dt, symbol, tf, period, gap, f"{position}→{'TP' if hit_tp else 'SL'}",
+                             entry_px, px, pnl, roe, k_now, d_now])
+                position = None; entry_px = None; qty = None
+                continue
 
-
+            # ⭐ 반대 교차 시 청산
+            if position == "LONG" and (k_prev > d_prev) and (k_now < d_now):
+                logs.append([dt, symbol, tf, period, gap, "LONG→EXIT", entry_px, px, pnl, roe, k_now, d_now])
+                position = None; entry_px = None; qty = None; continue
+            if position == "SHORT" and (k_prev < d_prev) and (k_now > d_now):
+                logs.append([dt, symbol, tf, period, gap, "SHORT→EXIT", entry_px, px, pnl, roe, k_now, d_now])
+                position = None; entry_px = None; qty = None; continue
 
     return pd.DataFrame(logs, columns=[
-        "datetime", "symbol", "timeframe", "period", "gap%", "position",
-        "entry", "exit", "PnL", "ROE", "%K_now", "%D_now"
+        "datetime","symbol","timeframe","period","gap%","position",
+        "entry","exit","PnL","ROE","%K_now","%D_now"
     ])
-
 
 # ================= 실행 =================
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
-
-    # 🔽 변경 포인트: zip으로 묶어서 같은 인덱스끼리만 실행
     KD_PAIRS = list(zip(STO_K_THRESH_ARR, STO_D_THRESH_ARR))
 
     for s in SYMBOLS:
@@ -179,14 +191,13 @@ if __name__ == "__main__":
                         for tp in TP_ROE_ARR:
                             for sl in SL_ROE_ARR:
                                 for gap in N_GAP_LIST:
-                                    for (k_th, d_th) in KD_PAIRS:  # ← zip 적용
-                                        label = f"{s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl} K{k_th} D{d_th}"
-                                        print(f"▶ {label}")
-                                        
-                                        df = backtest(s, tf, p, ks, ds, tp, sl, gap, k_th, d_th)
-                                        if df.empty: 
-                                            continue
-
-                                        fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}_K{k_th}_D{d_th}.csv"
-                                        df.to_csv(os.path.join(OUT_DIR, fname), index=False, encoding="utf-8-sig")
-                                        print(f"✅ Saved: {fname}")
+                                    for (k_th, d_th) in KD_PAIRS:
+                                        for use_strict in USE_STRICT_THRESH:
+                                            for k_only_ok in K_ONLY_OK:
+                                                label = f"{s}@{tf} ST{p} K{ks}D{ds} gap{gap}% TP{tp} SL{sl} K{k_th} D{d_th} strict{use_strict} Konly{k_only_ok}"
+                                                print(f"▶ {label}")
+                                                df = backtest(s, tf, p, ks, ds, tp, sl, gap, k_th, d_th, use_strict, k_only_ok)
+                                                if df.empty: continue
+                                                fname = f"{s}_{tf}_ST{p}_K{ks}D{ds}_gap{gap}_TP{tp}_SL{sl}_K{k_th}_D{d_th}_strict{use_strict}_Konly{k_only_ok}.csv"
+                                                df.to_csv(os.path.join(OUT_DIR, fname), index=False, encoding="utf-8-sig")
+                                                print(f"✅ Saved: {fname}")
