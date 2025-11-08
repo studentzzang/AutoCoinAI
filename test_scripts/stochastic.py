@@ -21,8 +21,8 @@ SL_ROE_ARR     = [15,0]
 STO_K_THRESH_ARR = [80,70,0]
 STO_D_THRESH_ARR = [20,30,0]
 
-USE_STRICT_THRESH = [True, False]   #상/하한선 먼저 터치해야만 진입
-K_ONLY_OK         = [True, False]   #임계선 체크를 K만으로 인정할지 여부
+USE_STRICT_THRESH = [True, False]   # ⭐ 상/하한선 먼저 터치해야만 진입
+K_ONLY_OK         = [True, False]   # ⭐ strict일 때만 작동 — K만 반등해도 진입 허용
 
 EQUITY         = 100.0
 LEVERAGE       = 5
@@ -100,7 +100,7 @@ def compute_stoch(df, period:int, k_smooth:int, d_smooth:int):
 
 # ================= 백테스트 =================
 def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap,
-             thresh_K, thresh_D, use_strict, k_only_ok):   # ⭐ strict만 남김
+             thresh_K, thresh_D, use_strict, k_only_ok):   
     start_ms = parse_date(START); end_ms = parse_date(END)
     ohlc = fetch_ohlcv(symbol, tf, start_ms, end_ms, MAX_CANDLES)
     if ohlc.empty: return pd.DataFrame()
@@ -116,7 +116,6 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap,
     eq_used = EQUITY
     logs = []
 
-    # ⭐ 상/하한 돌파 여부 기억
     touched_upper = False
     touched_lower = False
 
@@ -127,31 +126,34 @@ def backtest(symbol, tf, period, k_smooth, d_smooth, tp_roe, sl_roe, gap,
         k_now,  d_now  = ohlc.loc[i, "%K"],  ohlc.loc[i, "%D"]
         px = ohlc.loc[i, "close"]
 
-        # ⭐ 임계선 돌파 감지
-        if thresh_K and k_now >= thresh_K:
-            touched_upper = True
-        if thresh_D and k_now <= thresh_D:
-            touched_lower = True
+        # ⭐ strict일 때만 K/D 임계선 터치 체크
+        if use_strict:
+            if thresh_K and ((k_only_ok and k_now >= thresh_K) or (not k_only_ok and k_now >= thresh_K and d_now >= thresh_K)):
+                touched_upper = True
+            if thresh_D and ((k_only_ok and k_now <= thresh_D) or (not k_only_ok and k_now <= thresh_D and d_now <= thresh_D)):
+                touched_lower = True
 
         # === 진입 조건 ===
         if position is None:
-            # ⭐ 숏 진입 조건
+            # ⭐ 숏 진입
             if (k_prev > d_prev) and (k_now < d_now) and (k_prev - d_prev >= gap):
-                cond_now = (k_now > thresh_K) if k_only_ok else ((k_now > thresh_K) and (d_now > thresh_K))
-                if cond_now:
-                    if (not use_strict) or touched_upper:  # ⭐ strict면 반드시 상한선 터치 후 내려와야 함
-                        position = "SHORT"; entry_px = px; qty = notional / px
-                        touched_upper = False  # ⭐ 초기화
-                        continue
+                cond_now = (k_now > thresh_K) and (d_now > thresh_K)   # ⭐ strict=False면 항상 둘 다 기준
+                if use_strict:
+                    cond_now = (k_now > thresh_K) if k_only_ok else ((k_now > thresh_K) and (d_now > thresh_K))
+                if cond_now and ((not use_strict) or touched_upper):
+                    position = "SHORT"; entry_px = px; qty = notional / px
+                    touched_upper = False
+                    continue
 
-            # ⭐ 롱 진입 조건
+            # ⭐ 롱 진입
             if (k_prev < d_prev) and (k_now > d_now) and (d_prev - k_prev >= gap):
-                cond_now = (k_now < thresh_D) if k_only_ok else ((k_now < thresh_D) and (d_now < thresh_D))
-                if cond_now:
-                    if (not use_strict) or touched_lower:  # ⭐ strict면 반드시 하한선 터치 후 올라와야 함
-                        position = "LONG"; entry_px = px; qty = notional / px
-                        touched_lower = False
-                        continue
+                cond_now = (k_now < thresh_D) and (d_now < thresh_D)   # ⭐ strict=False면 항상 둘 다 기준
+                if use_strict:
+                    cond_now = (k_now < thresh_D) if k_only_ok else ((k_now < thresh_D) and (d_now < thresh_D))
+                if cond_now and ((not use_strict) or touched_lower):
+                    position = "LONG"; entry_px = px; qty = notional / px
+                    touched_lower = False
+                    continue
 
         # === 청산 조건 ===
         if position:
