@@ -8,30 +8,30 @@ from pybit.unified_trading import HTTP
 # ================= 사용자 설정 =================
 OUT_DIR        = r"d:\Projects\AutoCoinAI\test"
 SYMBOLS        = ["PUMPFUNUSDT"]
-TIMEFRAMES     = ["30"]
+TIMEFRAMES     = ["1"]
 
-STOCH_PERIODS  = [5,7,9]
-K_SMOOTH_ARR   = [3,5]
-D_SMOOTH_ARR   = [3,5]
-N_GAP_LIST     = [1,3,5]
+STOCH_PERIODS  = [50,100]
+K_SMOOTH_ARR   = [5,10,20]
+D_SMOOTH_ARR   = [5,10]
+N_GAP_LIST     = [3,5,8]
 
-TP_ROE_ARR     = [15,0]
-SL_ROE_ARR     = [15,0]
+TP_ROE_ARR     = [5,10,0]
+SL_ROE_ARR     = [5,10,15,0]
 
 #  과매수/과매도 기준값 (같은 인덱스끼리만 조합)
-STO_OVERBOUGHT_ARR = [80,70,0]
-STO_OVERSOLD_ARR   = [20,30,0]
+STO_OVERBOUGHT_ARR = [80]
+STO_OVERSOLD_ARR   = [20]
 
-USE_STRICT_THRESH = [True, False]   # 상/하한선 먼저 터치해야만 진입
-K_ONLY_OK         = [True, False]   #  strict일 때만 작동 — K만 반등해도 진입 허용
+USE_STRICT_THRESH = [True]   # 상/하한선 먼저 터치해야만 진입
+K_ONLY_OK         = [False]   #  strict일 때만 작동 — K만 반등해도 진입 허용
 USE_CROSS_STOPLOSS_ARR = [True, False]  #  반대 크로스 손절 사용 여부
 
 EQUITY         = 100.0
-LEVERAGE       = 5
+LEVERAGE       = 10
 START          = "2025-01-01"
 END            = None
 MAX_CANDLES    = 30000
-SLEEP_PER_REQ  = 0.11
+SLEEP_PER_REQ  = 0.07
 MAX_RETRY      = 3
 
 session = HTTP()
