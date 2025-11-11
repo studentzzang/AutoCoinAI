@@ -36,7 +36,7 @@ SL_ROE_ARR = [5, 10, 15]
 # 3 = RSI로만 청산
 TP_MODE_ARR = [1, 2, 3]
 
-TIME_WAIT = 0.1
+TIME_WAIT = 0.13
 
 session = HTTP()
 
@@ -67,7 +67,7 @@ def fetch_ohlcv_capped(symbol, tf, start_ms, end_ms, max_candles):
     if start_ms is None:
         start_ms = parse_date("2018-01-01")
     if end_ms is None:
-        end_ms = int(datetime.now(tz=timezone.utc).timestamp()*1000)
+        end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
     rows = []
     cap = max_candles if max_candles is not None else 10**18
@@ -75,15 +75,33 @@ def fetch_ohlcv_capped(symbol, tf, start_ms, end_ms, max_candles):
 
     while len(rows) < cap and cur_end > start_ms:
         req_limit = int(min(1000, cap - len(rows)))
-        resp = session.get_kline(
-            category="linear",
-            symbol=symbol,
-            interval=interval,
-            end=cur_end,
-            limit=req_limit,
-        )
-        if resp.get("retCode") != 0:
-            raise RuntimeError(resp.get("retMsg"))
+
+        # ============ [📡 API 요청 + 예외 처리 + 재시도 루프] ============
+        for attempt in range(20):  # 최대 20번까지 재시도
+            try:
+                resp = session.get_kline(
+                    category="linear",
+                    symbol=symbol,
+                    interval=interval,
+                    end=cur_end,
+                    limit=req_limit,
+                )
+                if resp.get("retCode") == 0:
+                    break  # 성공했으면 루프 탈출
+                elif resp.get("retCode") == 10006:
+                    print(f"[RATE LIMIT] {symbol} {tf} : Too many requests, 10초 대기 후 재시도 ({attempt+1}/20)")
+                    time.sleep(10)
+                else:
+                    print(f"[WARN] API Error {resp.get('retCode')} {resp.get('retMsg')}, 3초 대기")
+                    time.sleep(3)
+            except Exception as e:
+                print(f"[ERROR] 요청 실패 ({attempt+1}/20): {e}")
+                time.sleep(5)
+        else:
+            raise RuntimeError(f"❌ {symbol} {tf}: API 재시도 한도 초과")
+
+        # ============================================================
+
         lst = resp.get("result", {}).get("list", [])
         if not lst:
             break
@@ -97,17 +115,20 @@ def fetch_ohlcv_capped(symbol, tf, start_ms, end_ms, max_candles):
         cur_end = min(int(x[0]) for x in lst) - 1
         if len(lst) < req_limit:
             break
-        time.sleep(TIME_WAIT)
+
+        # 속도 조절 (API 부담 방지)
+        time.sleep(0.4)
 
     if not rows:
-        return pd.DataFrame(columns=["ts","open","high","low","close","volume"])
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
-    df = pd.DataFrame(rows, columns=["ts","open","high","low","close","volume"]).drop_duplicates("ts")
+    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"]).drop_duplicates("ts")
     df.sort_values("ts", inplace=True)
     if max_candles:
         df = df.tail(int(max_candles))
     df.reset_index(drop=True, inplace=True)
     return df
+
 
 def compute_rsi(close: pd.Series, period: int) -> pd.Series:
     delta = close.diff()
@@ -119,129 +140,132 @@ def compute_rsi(close: pd.Series, period: int) -> pd.Series:
     return 100 - (100/(1+rs))
 
 def _as_list(x):
-    return x if isinstance(x, (list, tuple)) else [x]
+    return x if isinstance(x, (list, tuple)) else [x]                                                     
 
 # ====================== 시뮬 ======================
+
 def run(symbol, tf, rsi_period, leverage, equity, start, end, out_dir, tp_roe, sl_roe, tp_mode, doorstep_entry, doorstep_close):
-    start_ms = parse_date(start)
-    end_ms = parse_date(end)
+   
+        
+        start_ms = parse_date(start)
+        end_ms = parse_date(end)
 
-    ohlc = fetch_ohlcv_capped(symbol, tf, start_ms, end_ms, MAX_CANDLES)
-    if ohlc.empty:
-        raise SystemExit(f"❌ 데이터 없음 ({symbol}, {tf})")
+        ohlc = fetch_ohlcv_capped(symbol, tf, start_ms, end_ms, MAX_CANDLES)
+        if ohlc.empty:
+            raise SystemExit(f"❌ 데이터 없음 ({symbol}, {tf})")
 
-    ohlc["rsi"] = compute_rsi(ohlc["close"], rsi_period)
-    cols = ["datetime","symbol","timeframe","close","rsi","포지션","비고","entry_price","미실현PnL","ROE"]
-    log = []
+        ohlc["rsi"] = compute_rsi(ohlc["close"], rsi_period)
+        cols = ["datetime","symbol","timeframe","close","rsi","포지션","비고","entry_price","미실현PnL","ROE"]
+        log = []
 
-    position = None
-    entry_px = qty = init_margin = None
-    cooldown = 0
-    armed_short_switch = armed_long_switch = False
-    last_peak_level = last_trough_level = None
+        position = None
+        entry_px = qty = init_margin = None
+        cooldown = 0
+        armed_short_switch = armed_long_switch = False
+        last_peak_level = last_trough_level = None
 
-    for i in range(len(ohlc)):
-        ts = int(ohlc.loc[i, "ts"]) // 1000
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        px = float(ohlc.loc[i, "close"])
-        rv = float(ohlc.loc[i, "rsi"]) if not np.isnan(ohlc.loc[i, "rsi"]) else None
+        for i in range(len(ohlc)):
+            ts = int(ohlc.loc[i, "ts"]) // 1000
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            px = float(ohlc.loc[i, "close"])
+            rv = float(ohlc.loc[i, "rsi"]) if not np.isnan(ohlc.loc[i, "rsi"]) else None
 
-        remark = ""
-        pos_name = position if position else "FLAT"
-        entry_price = entry_px if entry_px else np.nan
-        unreal = 0.0
-        roe = 0.0
+            remark = ""
+            pos_name = position if position else "FLAT"
+            entry_price = entry_px if entry_px else np.nan
+            unreal = 0.0
+            roe = 0.0
 
-        # arm
-        if rv is not None:
-            if rv <= LONG_SWITCH_RSI: armed_long_switch = True
-            if rv >= SHORT_SWITCH_RSI: armed_short_switch = True
-            if rv >= 80: last_peak_level = max(last_peak_level or 0, 80)
-            if rv <= 20: last_trough_level = min(last_trough_level or 100, 20)
+            # arm
+            if rv is not None:
+                if rv <= LONG_SWITCH_RSI: armed_long_switch = True
+                if rv >= SHORT_SWITCH_RSI: armed_short_switch = True
+                if rv >= 80: last_peak_level = max(last_peak_level or 0, 80)
+                if rv <= 20: last_trough_level = min(last_trough_level or 100, 20)
 
-        if cooldown > 0:
-            cooldown -= 1
+            if cooldown > 0:
+                cooldown -= 1
 
-        # === 진입 ===
-        if position is None and rv is not None and cooldown == 0:
-            if (last_peak_level is not None) and armed_short_switch:
-                short_trigger = last_peak_level - doorstep_entry
-                if rv <= short_trigger:
-                    notional = equity * leverage
-                    entry_px = px
-                    qty = notional / entry_px
-                    init_margin = notional / leverage
-                    position = "SHORT"
-                    remark = f"SHORT 진입 (RSI≤{short_trigger:.1f})"
-                    cooldown = COOLDOWN_BARS
-                    armed_short_switch = False
+            # === 진입 ===
+            if position is None and rv is not None and cooldown == 0:
+                if (last_peak_level is not None) and armed_short_switch:
+                    short_trigger = last_peak_level - doorstep_entry
+                    if rv <= short_trigger:
+                        notional = equity * leverage
+                        entry_px = px
+                        qty = notional / entry_px
+                        init_margin = notional / leverage
+                        position = "SHORT"
+                        remark = f"SHORT 진입 (RSI≤{short_trigger:.1f})"
+                        cooldown = COOLDOWN_BARS
+                        armed_short_switch = False
 
-            elif (last_trough_level is not None) and armed_long_switch:
-                long_trigger = last_trough_level + doorstep_entry
-                if rv >= long_trigger:
-                    notional = equity * leverage
-                    entry_px = px
-                    qty = notional / entry_px
-                    init_margin = notional / leverage
-                    position = "LONG"
-                    remark = f"LONG 진입 (RSI≥{long_trigger:.1f})"
-                    cooldown = COOLDOWN_BARS
-                    armed_long_switch = False
+                elif (last_trough_level is not None) and armed_long_switch:
+                    long_trigger = last_trough_level + doorstep_entry
+                    if rv >= long_trigger:
+                        notional = equity * leverage
+                        entry_px = px
+                        qty = notional / entry_px
+                        init_margin = notional / leverage
+                        position = "LONG"
+                        remark = f"LONG 진입 (RSI≥{long_trigger:.1f})"
+                        cooldown = COOLDOWN_BARS
+                        armed_long_switch = False
 
-        # === 보유 중 ===
-        elif position is not None and rv is not None:
-            if position == "LONG":
-                unreal = (px - entry_px) * qty
-                roe = unreal / init_margin * 100 if init_margin else 0.0
+            # === 보유 중 ===
+            elif position is not None and rv is not None:
+                if position == "LONG":
+                    unreal = (px - entry_px) * qty
+                    roe = unreal / init_margin * 100 if init_margin else 0.0
 
-                if roe <= -sl_roe:
-                    remark = f"close LONG (SL {roe:.1f}%)"
-                    position = None
-                elif roe >= tp_roe:
-                    if tp_mode == 1:
-                        remark = f"close LONG (TP {roe:.1f}%)"
+                    if roe <= -sl_roe:
+                        remark = f"close LONG (SL {roe:.1f}%)"
                         position = None
-                    elif tp_mode == 2:
-                        if rv >= SHORT_SWITCH_RSI - doorstep_close:
-                            remark = f"close LONG (RSI 과매수, TP모드2)"
+                    elif roe >= tp_roe:
+                        if tp_mode == 1:
+                            remark = f"close LONG (TP {roe:.1f}%)"
                             position = None
-                    elif tp_mode == 3:
-                        if rv >= SHORT_SWITCH_RSI - doorstep_close:
-                            remark = f"close LONG (RSI 청산, TP모드3)"
-                            position = None
+                        elif tp_mode == 2:
+                            if rv >= SHORT_SWITCH_RSI - doorstep_close:
+                                remark = f"close LONG (RSI 과매수, TP모드2)"
+                                position = None
+                        elif tp_mode == 3:
+                            if rv >= SHORT_SWITCH_RSI - doorstep_close:
+                                remark = f"close LONG (RSI 청산, TP모드3)"
+                                position = None
 
-            elif position == "SHORT":
-                unreal = (entry_px - px) * qty
-                roe = unreal / init_margin * 100 if init_margin else 0.0
+                elif position == "SHORT":
+                    unreal = (entry_px - px) * qty
+                    roe = unreal / init_margin * 100 if init_margin else 0.0
 
-                if roe <= -sl_roe:
-                    remark = f"close SHORT (SL {roe:.1f}%)"
-                    position = None
-                elif roe >= tp_roe:
-                    if tp_mode == 1:
-                        remark = f"close SHORT (TP {roe:.1f}%)"
+                    if roe <= -sl_roe:
+                        remark = f"close SHORT (SL {roe:.1f}%)"
                         position = None
-                    elif tp_mode == 2:
-                        if rv <= LONG_SWITCH_RSI + doorstep_close:
-                            remark = f"close SHORT (RSI 과매도, TP모드2)"
+                    elif roe >= tp_roe:
+                        if tp_mode == 1:
+                            remark = f"close SHORT (TP {roe:.1f}%)"
                             position = None
-                    elif tp_mode == 3:
-                        if rv <= LONG_SWITCH_RSI + doorstep_close:
-                            remark = f"close SHORT (RSI 청산, TP모드3)"
-                            position = None
+                        elif tp_mode == 2:
+                            if rv <= LONG_SWITCH_RSI + doorstep_close:
+                                remark = f"close SHORT (RSI 과매도, TP모드2)"
+                                position = None
+                        elif tp_mode == 3:
+                            if rv <= LONG_SWITCH_RSI + doorstep_close:
+                                remark = f"close SHORT (RSI 청산, TP모드3)"
+                                position = None
 
-        # FLAT 완전 제거 — 진입/청산 결과만 저장
-        if remark and ("진입" in remark or "close" in remark):
-            log.append([dt, symbol, tf, px, rv, position if position else "FLAT", remark, entry_px, unreal, roe])
+            # FLAT 완전 제거 — 진입/청산 결과만 저장
+            if remark and ("진입" in remark or "close" in remark):
+                log.append([dt, symbol, tf, px, rv, position if position else "FLAT", remark, entry_px, unreal, roe])
 
-    df = pd.DataFrame(log, columns=cols)
-    os.makedirs(out_dir, exist_ok=True)
-    fname = f"{symbol}_{tf}_{rsi_period}_TP{tp_roe}_SL{sl_roe}_MODE{tp_mode}_EN{doorstep_entry}_CL{doorstep_close}.csv"
-    path = os.path.join(out_dir, fname)
-    df.to_csv(path, index=False, encoding="utf-8-sig")
-    return path
+        df = pd.DataFrame(log, columns=cols)
+        os.makedirs(out_dir, exist_ok=True)
+        fname = f"{symbol}_{tf}_{rsi_period}_TP{tp_roe}_SL{sl_roe}_MODE{tp_mode}_EN{doorstep_entry}_CL{doorstep_close}.csv"
+        path = os.path.join(out_dir, fname)
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        return path
 
-# ====================== 실행 ======================
+# ==================저장===================
 if __name__ == "__main__":
     for s in _as_list(SYMBOL):
         for tf in _as_list(TIMEFRAME):
