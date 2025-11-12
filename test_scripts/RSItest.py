@@ -14,8 +14,10 @@ TIMEFRAME = [1,5,15,30]
 RSI_PERIOD = [7, 9, 10, 14]
 EQUITY = 100.0
 START = "2025-02-01"
-END = "2025-09-18"
-OUT_DIR = "tests"
+END = "2025-11-12"
+OUT_DIR = "test"
+
+MAX_CANDLES = 20000 
 
 # RSI 트리거 값
 OPEN_SHORT_RSI = 72.0
@@ -57,22 +59,39 @@ def bybit_interval(tf: str) -> str:
         raise ValueError(f"지원하지 않는 분봉/주기: {tf}")
     return mapping[tf]
 
-def fetch_ohlcv_10000(symbol: str, tf: str, start_ms=None, end_ms=None) -> pd.DataFrame:
+def fetch_ohlcv_10000(symbol: str, tf: str, start_ms=None, end_ms=None, max_candles: int = MAX_CANDLES) -> pd.DataFrame:
     interval = bybit_interval(tf)
     if end_ms is None:
         end_ms = int(datetime.now(tz=timezone.utc).timestamp()*1000)
 
     rows = []
-    while len(rows) < 10000:
-        resp = session.get_kline(
-            category="linear",
-            symbol=symbol,
-            interval=interval,
-            end=end_ms,
-            limit=1000
-        )
-        if resp.get("retCode") != 0:
-            raise RuntimeError(resp.get("retMsg"))
+    while len(rows) < max_candles:
+        # ===== 여기만 변경: API 호출 3회 재시도 =====
+        resp = None
+        last_err = None
+        for attempt in range(3):
+            try:
+                r = session.get_kline(
+                    category="linear",
+                    symbol=symbol,
+                    interval=interval,
+                    end=end_ms,
+                    limit=1000
+                )
+                # retCode 검사
+                if r.get("retCode") == 0:
+                    resp = r
+                    break
+                else:
+                    last_err = RuntimeError(f"retCode {r.get('retCode')} {r.get('retMsg')}")
+            except Exception as e:
+                last_err = e
+            # 다음 시도 전 잠깐 대기
+            time.sleep(0.4)
+        if resp is None:
+            # 3회 실패 시 예외 그대로 던짐
+            raise last_err if last_err else RuntimeError("Unknown API error")
+
         lst = resp["result"]["list"]
         if not lst:
             break
@@ -87,7 +106,7 @@ def fetch_ohlcv_10000(symbol: str, tf: str, start_ms=None, end_ms=None) -> pd.Da
     df = pd.DataFrame(rows, columns=["ts","open","high","low","close","volume"]).drop_duplicates("ts")
     df.sort_values("ts", inplace=True)
     df.reset_index(drop=True, inplace=True)
-    return df.head(10000)
+    return df.head(max_candles)
 
 def compute_rsi(close: pd.Series, period: int) -> pd.Series:
     delta = close.diff()
@@ -190,9 +209,10 @@ def run(symbol: str, tf: str, rsi_period: int, leverage: float, equity: float,
                 entry_px=None; qty=None; init_margin=None
                 continue
 
-        log.append([dt, symbol, tf, px, rv, position if position else "FLAT", remark, entry_px, unreal, roe])
-
+    # === 청산된 데이터만 저장 ===
     df = pd.DataFrame(log, columns=cols)
+    df = df[df["포지션"] == "CLOSE"].reset_index(drop=True)
+
     os.makedirs(out_dir, exist_ok=True)
     fname = f"{symbol}_{tf}_{rsi_period}_TP{tp_roe}_SL{sl_roe}_MODE{tp_mode}.csv"
     path = os.path.join(out_dir, fname)
