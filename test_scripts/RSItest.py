@@ -2,45 +2,39 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
+
 import pandas as pd
 import numpy as np
 from pybit.unified_trading import HTTP
 
-# ====================== 사용자 설정 ======================
+# ====== 사용자 설정 변수 ======
 SYMBOL = ["PUMPFUNUSDT","FARTCOINUSDT"]
-LEVERAGE = 10
-TIMEFRAME = ["1","5","15","30"]
-RSI_PERIOD = [7,9,12,14]
+LEVERAGE = 5
+TIMEFRAME = [1,5,15,30]
+RSI_PERIOD = [7, 9, 10, 14]
 EQUITY = 100.0
-START = "2025-01-01"
-END = "2025-11-03"
-OUT_DIR = "test"
-MAX_CANDLES = 35000  # 더 오래 가져오려면 None
+START = "2025-02-01"
+END = "2025-09-18"
+OUT_DIR = "tests"
 
-# RSI 진입 조건
-LONG_SWITCH_RSI = 28.0
-SHORT_SWITCH_RSI = 72.0
+# RSI 트리거 값
+OPEN_SHORT_RSI = 72.0
+OPEN_LONG_RSI  = 28.0
+CLOSE_SHORT_RSI = 70.0
+CLOSE_LONG_RSI  = 30.0
 
-# 진입 / 청산 문턱 배열 
-DOORSTEP_ENTRY_ARR = [3, 5, 7, 9]
-DOORSTEP_CLOSE_ARR = [2, 3, 4]
-COOLDOWN_BARS = 0
-
-# TP/SL
-TP_ROE_ARR = [5, 10, 15]
-SL_ROE_ARR = [5, 10, 15]
-
-# TP_MODE: 1~3
-# 1 = TP만 의존
-# 2 = TP 후 RSI 반대구간 진입시 익절
-# 3 = RSI로만 청산
-TP_MODE_ARR = [1, 2, 3]
-
-TIME_WAIT = 0.13
+# ====== TP / SL 배열 ======
+TP_ROE_ARR = [10,15]
+SL_ROE_ARR = [10,15]
+TP_MODE_ARR = [1, 2]   # 1 = RSI 반대 시 익절, 2 = TP/SL만 의존
+# ==========================
 
 session = HTTP()
 
-# ====================== 유틸 ======================
+# ---------- 유틸 ----------
+def _as_list(x):
+    return x if isinstance(x, (list, tuple)) else [x]
+
 def parse_date(s: Optional[str]) -> Optional[int]:
     if not s:
         return None
@@ -53,82 +47,47 @@ def parse_date(s: Optional[str]) -> Optional[int]:
     return int(dt.timestamp() * 1000)
 
 def bybit_interval(tf: str) -> str:
+    tf = str(tf).upper()
     mapping = {
         "1":"1","3":"3","5":"5","15":"15","30":"30",
-        "60":"60","120":"120","240":"240","720":"720",
+        "60":"60","120":"120","240":"240","360":"360","720":"720",
         "D":"D","W":"W","M":"M"
     }
     if tf not in mapping:
-        raise ValueError(f"지원하지 않는 분봉: {tf}")
+        raise ValueError(f"지원하지 않는 분봉/주기: {tf}")
     return mapping[tf]
 
-def fetch_ohlcv_capped(symbol, tf, start_ms, end_ms, max_candles):
+def fetch_ohlcv_10000(symbol: str, tf: str, start_ms=None, end_ms=None) -> pd.DataFrame:
     interval = bybit_interval(tf)
-    if start_ms is None:
-        start_ms = parse_date("2018-01-01")
     if end_ms is None:
-        end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        end_ms = int(datetime.now(tz=timezone.utc).timestamp()*1000)
 
     rows = []
-    cap = max_candles if max_candles is not None else 10**18
-    cur_end = end_ms
-
-    while len(rows) < cap and cur_end > start_ms:
-        req_limit = int(min(1000, cap - len(rows)))
-
-        # ============ [📡 API 요청 + 예외 처리 + 재시도 루프] ============
-        for attempt in range(20):  # 최대 20번까지 재시도
-            try:
-                resp = session.get_kline(
-                    category="linear",
-                    symbol=symbol,
-                    interval=interval,
-                    end=cur_end,
-                    limit=req_limit,
-                )
-                if resp.get("retCode") == 0:
-                    break  # 성공했으면 루프 탈출
-                elif resp.get("retCode") == 10006:
-                    print(f"[RATE LIMIT] {symbol} {tf} : Too many requests, 10초 대기 후 재시도 ({attempt+1}/20)")
-                    time.sleep(10)
-                else:
-                    print(f"[WARN] API Error {resp.get('retCode')} {resp.get('retMsg')}, 3초 대기")
-                    time.sleep(3)
-            except Exception as e:
-                print(f"[ERROR] 요청 실패 ({attempt+1}/20): {e}")
-                time.sleep(5)
-        else:
-            raise RuntimeError(f"❌ {symbol} {tf}: API 재시도 한도 초과")
-
-        # ============================================================
-
-        lst = resp.get("result", {}).get("list", [])
+    while len(rows) < 10000:
+        resp = session.get_kline(
+            category="linear",
+            symbol=symbol,
+            interval=interval,
+            end=end_ms,
+            limit=1000
+        )
+        if resp.get("retCode") != 0:
+            raise RuntimeError(resp.get("retMsg"))
+        lst = resp["result"]["list"]
         if not lst:
             break
-
         for it in lst:
-            ts = int(it[0])
-            if ts < start_ms:
-                continue
-            rows.append((ts, float(it[1]), float(it[2]), float(it[3]), float(it[4]), float(it[5])))
-
-        cur_end = min(int(x[0]) for x in lst) - 1
-        if len(lst) < req_limit:
+            ts = int(it[0]); o,h,l,c,v = map(float, it[1:6])
+            rows.append((ts,o,h,l,c,v))
+        end_ms = min(int(x[0]) for x in lst) - 1
+        if len(lst) < 1000:
             break
+        time.sleep(0.12)
 
-        # 속도 조절 (API 부담 방지)
-        time.sleep(0.4)
-
-    if not rows:
-        return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
-
-    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"]).drop_duplicates("ts")
+    df = pd.DataFrame(rows, columns=["ts","open","high","low","close","volume"]).drop_duplicates("ts")
     df.sort_values("ts", inplace=True)
-    if max_candles:
-        df = df.tail(int(max_candles))
     df.reset_index(drop=True, inplace=True)
-    return df
-
+    return df.head(10000)
 
 def compute_rsi(close: pd.Series, period: int) -> pd.Series:
     delta = close.diff()
@@ -139,143 +98,114 @@ def compute_rsi(close: pd.Series, period: int) -> pd.Series:
     rs = roll_up / (roll_down + 1e-12)
     return 100 - (100/(1+rs))
 
-def _as_list(x):
-    return x if isinstance(x, (list, tuple)) else [x]                                                     
+# ---------- 시뮬 ----------
+def run(symbol: str, tf: str, rsi_period: int, leverage: float, equity: float,
+        start: Optional[str], end: Optional[str], out_dir: str,
+        tp_roe: float, sl_roe: float, tp_mode: int) -> str:
+    
+    start_ms = parse_date(start)
+    end_ms = parse_date(end)
 
-# ====================== 시뮬 ======================
+    ohlc = fetch_ohlcv_10000(symbol, tf, start_ms, end_ms)
+    if ohlc.empty:
+        raise SystemExit("❌ 시세 데이터가 비었습니다. 심볼/기간/분봉을 확인하세요.")
 
-def run(symbol, tf, rsi_period, leverage, equity, start, end, out_dir, tp_roe, sl_roe, tp_mode, doorstep_entry, doorstep_close):
-   
-        
-        start_ms = parse_date(start)
-        end_ms = parse_date(end)
+    ohlc["rsi"] = compute_rsi(ohlc["close"], rsi_period)
 
-        ohlc = fetch_ohlcv_capped(symbol, tf, start_ms, end_ms, MAX_CANDLES)
-        if ohlc.empty:
-            raise SystemExit(f"❌ 데이터 없음 ({symbol}, {tf})")
+    cols = ["datetime","symbol","timeframe","close","rsi","포지션","비고","entry_price","미실현PnL","ROE"]
+    log = []
 
-        ohlc["rsi"] = compute_rsi(ohlc["close"], rsi_period)
-        cols = ["datetime","symbol","timeframe","close","rsi","포지션","비고","entry_price","미실현PnL","ROE"]
-        log = []
+    position = None
+    entry_px = None
+    qty = None
+    init_margin = None
 
-        position = None
-        entry_px = qty = init_margin = None
-        cooldown = 0
-        armed_short_switch = armed_long_switch = False
-        last_peak_level = last_trough_level = None
+    for i in range(len(ohlc)):
+        ts = int(ohlc.loc[i, "ts"]) // 1000
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        px = float(ohlc.loc[i, "close"])
+        rv = float(ohlc.loc[i, "rsi"]) if not np.isnan(ohlc.loc[i, "rsi"]) else None
 
-        for i in range(len(ohlc)):
-            ts = int(ohlc.loc[i, "ts"]) // 1000
-            dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            px = float(ohlc.loc[i, "close"])
-            rv = float(ohlc.loc[i, "rsi"]) if not np.isnan(ohlc.loc[i, "rsi"]) else None
+        remark = ""
+        pos_name = position if position else "FLAT"
+        entry_price = entry_px if entry_px is not None else np.nan
+        unreal = 0.0
+        roe = 0.0
 
-            remark = ""
-            pos_name = position if position else "FLAT"
-            entry_price = entry_px if entry_px else np.nan
-            unreal = 0.0
-            roe = 0.0
+        # === 진입 ===
+        if position is None and rv is not None:
+            if rv >= OPEN_SHORT_RSI:
+                position = "SHORT"; entry_px = px
+                notional = equity * leverage
+                qty = notional / entry_px
+                init_margin = notional / leverage
+                remark = "SHORT 진입"
+            elif rv <= OPEN_LONG_RSI:
+                position = "LONG"; entry_px = px
+                notional = equity * leverage
+                qty = notional / entry_px
+                init_margin = notional / leverage
+                remark = "LONG 진입"
 
-            # arm
-            if rv is not None:
-                if rv <= LONG_SWITCH_RSI: armed_long_switch = True
-                if rv >= SHORT_SWITCH_RSI: armed_short_switch = True
-                if rv >= 80: last_peak_level = max(last_peak_level or 0, 80)
-                if rv <= 20: last_trough_level = min(last_trough_level or 100, 20)
+        # === 보유 중 ===
+        elif position is not None and rv is not None:
+            if position == "LONG":
+                unreal = (px - entry_px) * qty
+                roe = (unreal / init_margin) * 100
 
-            if cooldown > 0:
-                cooldown -= 1
-
-            # === 진입 ===
-            if position is None and rv is not None and cooldown == 0:
-                if (last_peak_level is not None) and armed_short_switch:
-                    short_trigger = last_peak_level - doorstep_entry
-                    if rv <= short_trigger:
-                        notional = equity * leverage
-                        entry_px = px
-                        qty = notional / entry_px
-                        init_margin = notional / leverage
-                        position = "SHORT"
-                        remark = f"SHORT 진입 (RSI≤{short_trigger:.1f})"
-                        cooldown = COOLDOWN_BARS
-                        armed_short_switch = False
-
-                elif (last_trough_level is not None) and armed_long_switch:
-                    long_trigger = last_trough_level + doorstep_entry
-                    if rv >= long_trigger:
-                        notional = equity * leverage
-                        entry_px = px
-                        qty = notional / entry_px
-                        init_margin = notional / leverage
-                        position = "LONG"
-                        remark = f"LONG 진입 (RSI≥{long_trigger:.1f})"
-                        cooldown = COOLDOWN_BARS
-                        armed_long_switch = False
-
-            # === 보유 중 ===
-            elif position is not None and rv is not None:
-                if position == "LONG":
-                    unreal = (px - entry_px) * qty
-                    roe = unreal / init_margin * 100 if init_margin else 0.0
-
+                # MODE1: RSI 반대 시그널 익절, SL은 ROE 기준
+                if tp_mode == 1:
                     if roe <= -sl_roe:
-                        remark = f"close LONG (SL {roe:.1f}%)"
-                        position = None
-                    elif roe >= tp_roe:
-                        if tp_mode == 1:
-                            remark = f"close LONG (TP {roe:.1f}%)"
-                            position = None
-                        elif tp_mode == 2:
-                            if rv >= SHORT_SWITCH_RSI - doorstep_close:
-                                remark = f"close LONG (RSI 과매수, TP모드2)"
-                                position = None
-                        elif tp_mode == 3:
-                            if rv >= SHORT_SWITCH_RSI - doorstep_close:
-                                remark = f"close LONG (RSI 청산, TP모드3)"
-                                position = None
+                        remark = f"close LONG (SL {roe:.1f}%)"; position=None
+                    elif rv >= OPEN_SHORT_RSI:
+                        remark = f"close LONG (RSI 반대 시그널)"; position=None
 
-                elif position == "SHORT":
-                    unreal = (entry_px - px) * qty
-                    roe = unreal / init_margin * 100 if init_margin else 0.0
+                # MODE2: TP/SL만 의존
+                elif tp_mode == 2:
+                    if roe >= tp_roe:
+                        remark = f"close LONG (TP {roe:.1f}%)"; position=None
+                    elif roe <= -sl_roe:
+                        remark = f"close LONG (SL {roe:.1f}%)"; position=None
 
+            elif position == "SHORT":
+                unreal = (entry_px - px) * qty
+                roe = (unreal / init_margin) * 100
+
+                # MODE1: RSI 반대 시그널 익절, SL은 ROE 기준
+                if tp_mode == 1:
                     if roe <= -sl_roe:
-                        remark = f"close SHORT (SL {roe:.1f}%)"
-                        position = None
-                    elif roe >= tp_roe:
-                        if tp_mode == 1:
-                            remark = f"close SHORT (TP {roe:.1f}%)"
-                            position = None
-                        elif tp_mode == 2:
-                            if rv <= LONG_SWITCH_RSI + doorstep_close:
-                                remark = f"close SHORT (RSI 과매도, TP모드2)"
-                                position = None
-                        elif tp_mode == 3:
-                            if rv <= LONG_SWITCH_RSI + doorstep_close:
-                                remark = f"close SHORT (RSI 청산, TP모드3)"
-                                position = None
+                        remark = f"close SHORT (SL {roe:.1f}%)"; position=None
+                    elif rv <= OPEN_LONG_RSI:
+                        remark = f"close SHORT (RSI 반대 시그널)"; position=None
 
-            # FLAT 완전 제거 — 진입/청산 결과만 저장
-            if remark and ("진입" in remark or "close" in remark):
-                log.append([dt, symbol, tf, px, rv, position if position else "FLAT", remark, entry_px, unreal, roe])
+                # MODE2: TP/SL만 의존
+                elif tp_mode == 2:
+                    if roe >= tp_roe:
+                        remark = f"close SHORT (TP {roe:.1f}%)"; position=None
+                    elif roe <= -sl_roe:
+                        remark = f"close SHORT (SL {roe:.1f}%)"; position=None
 
-        df = pd.DataFrame(log, columns=cols)
-        os.makedirs(out_dir, exist_ok=True)
-        fname = f"{symbol}_{tf}_{rsi_period}_TP{tp_roe}_SL{sl_roe}_MODE{tp_mode}_EN{doorstep_entry}_CL{doorstep_close}.csv"
-        path = os.path.join(out_dir, fname)
-        df.to_csv(path, index=False, encoding="utf-8-sig")
-        return path
+            if remark and "close" in remark:
+                log.append([dt, symbol, tf, px, rv, "CLOSE", remark, entry_px, unreal, roe])
+                entry_px=None; qty=None; init_margin=None
+                continue
 
-# ==================저장===================
+        log.append([dt, symbol, tf, px, rv, position if position else "FLAT", remark, entry_px, unreal, roe])
+
+    df = pd.DataFrame(log, columns=cols)
+    os.makedirs(out_dir, exist_ok=True)
+    fname = f"{symbol}_{tf}_{rsi_period}_TP{tp_roe}_SL{sl_roe}_MODE{tp_mode}.csv"
+    path = os.path.join(out_dir, fname)
+    df.to_csv(path, index=False, encoding="utf-8-sig")
+    return path
+
+# ---------- 실행 ----------
 if __name__ == "__main__":
     for s in _as_list(SYMBOL):
         for tf in _as_list(TIMEFRAME):
             for rp in _as_list(RSI_PERIOD):
                 for tp in TP_ROE_ARR:
                     for sl in SL_ROE_ARR:
-                        for tm in TP_MODE_ARR:
-                            for de in DOORSTEP_ENTRY_ARR:
-                                for dc in DOORSTEP_CLOSE_ARR:
-                                    csv_path = run(s, tf, rp, LEVERAGE, EQUITY,
-                                                START, END, OUT_DIR,
-                                                tp, sl, tm, de, dc)
-                                    print(f"✅ 저장 완료: {csv_path}")
+                        for mode in TP_MODE_ARR:
+                            csv_path = run(s, tf, rp, LEVERAGE, EQUITY, START, END, OUT_DIR, tp, sl, mode)
+                            print(f"✅ 저장 완료: {csv_path}")
