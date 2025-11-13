@@ -215,9 +215,9 @@ def update():
 
                 print(
                     f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-                    f"🪙 {symbol} 🕧 {interval} | 포지션:{position[symbol]} "
-                    f"| RSI:{RSI:.2f} | PnL:{Pnl:.3f} | ROE:{ROE:.2f} "
-                    f"| TP_MODE:{tp_mode} TP:{tp_roe} SL:{sl_roe}"
+                    f"🪙 {symbol} 🕧 {interval} | 🚩포지션:{position[symbol]} "
+                    f"| RSI:{RSI:.2f} |💸 PnL:{Pnl:.3f} |💎 ROE:{ROE:.2f} "
+                   
                 )
 
             except Exception as e:
