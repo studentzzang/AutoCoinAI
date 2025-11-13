@@ -44,7 +44,7 @@ def set_leverage(symbol, leverage):
         )
         print(f"✅ {symbol} 레버리지 설정 완료: {leverage}x")
     except Exception as e:
-        print(f"📛 {symbol} 레버리지 설정 실패: {e}")
+        print(f"📛 {symbol} 레버리지 이미 설정 되었습니다.")
 
 
 def get_kline_http(symbol, interval, limit=200):

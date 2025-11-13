@@ -20,15 +20,18 @@ OUT_DIR = "test"
 MAX_CANDLES = 20000 
 
 # RSI 트리거 값
-OPEN_SHORT_RSI = 72.0
-OPEN_LONG_RSI  = 28.0
+OPEN_SHORT_RSI  = 72.0   # 숏 진입 기준 (롱 반대 과상태)
+OPEN_LONG_RSI   = 28.0   # 롱 진입 기준 (숏 반대 과상태)
 CLOSE_SHORT_RSI = 70.0
 CLOSE_LONG_RSI  = 30.0
 
+# DOORSTEP 밴드 (반대 과상태일 때만 쓰는 RSI 범위)
+DOORSTEP = 3.0
+
 # ====== TP / SL 배열 ======
-TP_ROE_ARR = [10,15]
-SL_ROE_ARR = [10,15]
-TP_MODE_ARR = [1, 2]   # 1 = RSI 반대 시 익절, 2 = TP/SL만 의존
+TP_ROE_ARR   = [10,15]
+SL_ROE_ARR   = [10,15]
+TP_MODE_ARR  = [1, 2]   # 1 = DOORSTEP + TP / SL, 2 = TP/SL만 의존
 # ==========================
 
 session = HTTP()
@@ -66,7 +69,6 @@ def fetch_ohlcv_10000(symbol: str, tf: str, start_ms=None, end_ms=None, max_cand
 
     rows = []
     while len(rows) < max_candles:
-        # ===== 여기만 변경: API 호출 3회 재시도 =====
         resp = None
         last_err = None
         for attempt in range(3):
@@ -78,7 +80,6 @@ def fetch_ohlcv_10000(symbol: str, tf: str, start_ms=None, end_ms=None, max_cand
                     end=end_ms,
                     limit=1000
                 )
-                # retCode 검사
                 if r.get("retCode") == 0:
                     resp = r
                     break
@@ -86,10 +87,9 @@ def fetch_ohlcv_10000(symbol: str, tf: str, start_ms=None, end_ms=None, max_cand
                     last_err = RuntimeError(f"retCode {r.get('retCode')} {r.get('retMsg')}")
             except Exception as e:
                 last_err = e
-            # 다음 시도 전 잠깐 대기
             time.sleep(0.4)
+
         if resp is None:
-            # 3회 실패 시 예외 그대로 던짐
             raise last_err if last_err else RuntimeError("Unknown API error")
 
         lst = resp["result"]["list"]
@@ -123,7 +123,7 @@ def run(symbol: str, tf: str, rsi_period: int, leverage: float, equity: float,
         tp_roe: float, sl_roe: float, tp_mode: int) -> str:
     
     start_ms = parse_date(start)
-    end_ms = parse_date(end)
+    end_ms   = parse_date(end)
 
     ohlc = fetch_ohlcv_10000(symbol, tf, start_ms, end_ms)
     if ohlc.empty:
@@ -134,9 +134,9 @@ def run(symbol: str, tf: str, rsi_period: int, leverage: float, equity: float,
     cols = ["datetime","symbol","timeframe","close","rsi","포지션","비고","entry_price","미실현PnL","ROE"]
     log = []
 
-    position = None
-    entry_px = None
-    qty = None
+    position    = None
+    entry_px    = None
+    qty         = None
     init_margin = None
 
     for i in range(len(ohlc)):
@@ -145,68 +145,90 @@ def run(symbol: str, tf: str, rsi_period: int, leverage: float, equity: float,
         px = float(ohlc.loc[i, "close"])
         rv = float(ohlc.loc[i, "rsi"]) if not np.isnan(ohlc.loc[i, "rsi"]) else None
 
-        remark = ""
-        pos_name = position if position else "FLAT"
+        remark      = ""
+        pos_name    = position if position else "FLAT"
         entry_price = entry_px if entry_px is not None else np.nan
-        unreal = 0.0
-        roe = 0.0
+        unreal      = 0.0
+        roe         = 0.0
 
         # === 진입 ===
         if position is None and rv is not None:
             if rv >= OPEN_SHORT_RSI:
                 position = "SHORT"; entry_px = px
-                notional = equity * leverage
-                qty = notional / entry_px
+                notional    = equity * leverage
+                qty         = notional / entry_px
                 init_margin = notional / leverage
-                remark = "SHORT 진입"
+                remark      = "SHORT 진입"
             elif rv <= OPEN_LONG_RSI:
                 position = "LONG"; entry_px = px
-                notional = equity * leverage
-                qty = notional / entry_px
+                notional    = equity * leverage
+                qty         = notional / entry_px
                 init_margin = notional / leverage
-                remark = "LONG 진입"
+                remark      = "LONG 진입"
 
         # === 보유 중 ===
         elif position is not None and rv is not None:
+
             if position == "LONG":
                 unreal = (px - entry_px) * qty
-                roe = (unreal / init_margin) * 100
+                roe    = (unreal / init_margin) * 100
 
-                # MODE1: RSI 반대 시그널 익절, SL은 ROE 기준
                 if tp_mode == 1:
+                    # 1) SL : 항상 ROE 기준
                     if roe <= -sl_roe:
-                        remark = f"close LONG (SL {roe:.1f}%)"; position=None
-                    elif rv >= OPEN_SHORT_RSI:
-                        remark = f"close LONG (RSI 반대 시그널)"; position=None
+                        remark = f"close LONG (SL {roe:.1f}%)"; position = None
 
-                # MODE2: TP/SL만 의존
+                    # 2) TP : 조건 분기
+                    elif roe >= tp_roe:
+                        # 반대 과상태: 과매수 영역 (롱의 반대)
+                        if rv >= OPEN_SHORT_RSI:
+                            # DOORSTEP 밴드 안에 들어왔을 때만 청산
+                            if (OPEN_SHORT_RSI - DOORSTEP) <= rv <= (OPEN_SHORT_RSI + DOORSTEP):
+                                remark = f"close LONG (DOORSTEP TP, ROE {roe:.1f}%)"; position = None
+                            # DOORSTEP 바깥이면 계속 홀딩
+                        else:
+                            # 반대 과상태가 아니면 TP에만 의존 → TP 즉시 청산
+                            remark = f"close LONG (TP {roe:.1f}%)"; position = None
+
                 elif tp_mode == 2:
                     if roe >= tp_roe:
-                        remark = f"close LONG (TP {roe:.1f}%)"; position=None
+                        remark = f"close LONG (TP {roe:.1f}%)"; position = None
                     elif roe <= -sl_roe:
-                        remark = f"close LONG (SL {roe:.1f}%)"; position=None
+                        remark = f"close LONG (SL {roe:.1f}%)"; position = None
+
 
             elif position == "SHORT":
                 unreal = (entry_px - px) * qty
-                roe = (unreal / init_margin) * 100
+                roe    = (unreal / init_margin) * 100
 
-                # MODE1: RSI 반대 시그널 익절, SL은 ROE 기준
                 if tp_mode == 1:
+                    # 1) SL : 항상 ROE 기준
                     if roe <= -sl_roe:
-                        remark = f"close SHORT (SL {roe:.1f}%)"; position=None
-                    elif rv <= OPEN_LONG_RSI:
-                        remark = f"close SHORT (RSI 반대 시그널)"; position=None
+                        remark = f"close SHORT (SL {roe:.1f}%)"; position = None
 
-                # MODE2: TP/SL만 의존
+                    # 2) TP : 조건 분기
+                    elif roe >= tp_roe:
+                        # 반대 과상태: 과매도 영역 (숏의 반대)
+                        if rv <= OPEN_LONG_RSI:
+                            if (OPEN_LONG_RSI - DOORSTEP) <= rv <= (OPEN_LONG_RSI + DOORSTEP):
+                                remark = f"close SHORT (DOORSTEP TP, ROE {roe:.1f}%)"; position = None
+                            # DOORSTEP 바깥 → 홀딩
+                        else:
+                            # 반대 과상태 아니면 TP에만 의존
+                            remark = f"close SHORT (TP {roe:.1f}%)"; position = None
+
                 elif tp_mode == 2:
                     if roe >= tp_roe:
-                        remark = f"close SHORT (TP {roe:.1f}%)"; position=None
+                        remark = f"close SHORT (TP {roe:.1f}%)"; position = None
                     elif roe <= -sl_roe:
-                        remark = f"close SHORT (SL {roe:.1f}%)"; position=None
+                        remark = f"close SHORT (SL {roe:.1f}%)"; position = None
 
+            # === 청산된 경우만 로그 기록 ===
             if remark and "close" in remark:
                 log.append([dt, symbol, tf, px, rv, "CLOSE", remark, entry_px, unreal, roe])
-                entry_px=None; qty=None; init_margin=None
+                entry_px = None
+                qty = None
+                init_margin = None
                 continue
 
     # === 청산된 데이터만 저장 ===
