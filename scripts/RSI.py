@@ -15,12 +15,12 @@ if not _api_key or not _api_secret:
 session = HTTP(api_key=_api_key, api_secret=_api_secret, recv_window=10000, max_retries=0)
 
 # =====================================
-SYMBOLS      = ["FARTCOINUSDT", "PUNPFUNUSDT"]
-RSI_PERIODS  = [7, 7]
-INTERVALS    = ["30", "30"]
+SYMBOLS      = ["PUMPFUNUSDT"]
+RSI_PERIODS  = [9]
+INTERVALS    = ["1"]
 
-LONG_SWITCH_RSI  = [28, 28]   # 롱 스위치 기준
-SHORT_SWITCH_RSI = [72, 72]   # 숏 스위치 기준
+LONG_SWITCH_RSI  = [28]   # 롱 스위치 기준
+SHORT_SWITCH_RSI = [72]   # 숏 스위치 기준
 
 LEVERAGE      = "5"
 PCT           = 40
@@ -28,9 +28,9 @@ COOLDOWN_BARS = 0
 DOORSTEP      = 3
 
 # ===== TP/SL & MODE (심볼별) =====
-TP_ROE  = [12, 10]   # 심볼별 TP ROE(%)
-SL_ROE  = [15, 10]   # 심볼별 SL ROE(%)
-TP_MODE = [1, 1]     # 1: RSI 반대 시그널 기반, 2: ROE TP/SL만
+TP_ROE  = [10]  
+SL_ROE  = [15]   
+TP_MODE = [1]     
 # =================================
 
 position      = {s: None for s in SYMBOLS}
