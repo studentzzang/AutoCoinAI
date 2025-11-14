@@ -14,7 +14,7 @@ if not _api_key or not _api_secret:
 
 session = HTTP(api_key=_api_key, api_secret=_api_secret, recv_window=10000, max_retries=0)
 
-SYMBOLS      = ["PUNPFUNUSDT"]
+SYMBOLS      = ["PUMPFUNUSDT"]
 RSI_PERIODS  = [9]
 INTERVALS    = ["1"]
 
