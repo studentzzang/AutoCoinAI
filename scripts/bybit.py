@@ -139,7 +139,7 @@ def quantize_qty(qty, step):
     return float((q // s) * s)
 
 
-def entry_position(symbol, leverage, side):
+def entry_position(symbol, side, leverage):
     try:
         min_qty, step = get_lot_size(symbol)
     except Exception as e:
