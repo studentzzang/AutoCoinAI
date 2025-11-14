@@ -14,7 +14,6 @@ if not _api_key or not _api_secret:
 
 session = HTTP(api_key=_api_key, api_secret=_api_secret, recv_window=10000, max_retries=0)
 
-#------------
 SYMBOLS      = ["PUNPFUNUSDT"]
 RSI_PERIODS  = [9]
 INTERVALS    = ["1"]
@@ -27,19 +26,17 @@ PCT           = 40
 COOLDOWN_BARS = 0
 DOORSTEP      = 3.0  
 
-# ===== TP/SL & MODE (심볼별) =====
 TP_ROE  = [10]  
 SL_ROE  = [15]  
 TP_MODE = [1]   
-# =================================
 
 position      = {s: None for s in SYMBOLS}
 entry_px      = {s: None for s in SYMBOLS}
 init_margin   = {s: None for s in SYMBOLS}
 qty           = {s: None for s in SYMBOLS}
 
-last_peak_level    = {s: None for s in SYMBOLS}  
-last_trough_level  = {s: None for s in SYMBOLS}  
+last_peak_level    = {s: None for s in SYMBOLS}
+last_trough_level  = {s: None for s in SYMBOLS}
 armed_short_switch = {s: False for s in SYMBOLS}
 armed_long_switch  = {s: False for s in SYMBOLS}
 
@@ -53,7 +50,6 @@ for s in SYMBOLS:
 BASE_CASH = None
 
 
-# =====================================
 def start():
     global BASE_CASH
     BASE_CASH = bybit.get_usdt()
@@ -62,17 +58,15 @@ def start():
         bybit.set_leverage(symbol=s, leverage=LEVERAGE)
 
 
-# =====================================
-def reset_switch_after_close(symbol, RSI):
-    """ 청산 직후 스위치를 즉시 초기화해서 바로 재진입 가능하게 하는 함수 """
-    armed_long_switch[symbol]  = True
-    last_trough_level[symbol] = RSI
+def reset_switch_after_close(symbol, closed_side):
+    if closed_side == "long":
+        armed_long_switch[symbol] = True
+        last_trough_level[symbol] = None
+    elif closed_side == "short":
+        armed_short_switch[symbol] = True
+        last_peak_level[symbol] = None
 
-    armed_short_switch[symbol] = True
-    last_peak_level[symbol]   = RSI
 
-
-# =====================================
 def update():
     while True:
         for idx, symbol in enumerate(SYMBOLS):
@@ -92,14 +86,11 @@ def update():
                 c_prev2, c_prev1, cur_3 = bybit.get_close_price(symbol, interval=interval)
                 RSI = bybit.get_RSI(symbol, interval=interval, period=rsi_period)
 
-                # === 봉 교체 여부 ===
                 new_bar = (last_closed_price1[symbol] is None) or (last_closed_price1[symbol] != c_prev1)
                 if new_bar:
                     last_closed_price1[symbol] = c_prev1
                     if cooldown_bars[symbol] > 0:
                         cooldown_bars[symbol] -= 1
-
-                # = 롱스위치 
 
                 if RSI <= long_rsi:
                     if not armed_long_switch[symbol]:
@@ -108,7 +99,7 @@ def update():
                     else:
                         if last_trough_level[symbol] is None or RSI < last_trough_level[symbol]:
                             last_trough_level[symbol] = RSI
-                #   숏 스위치
+
                 if RSI >= short_rsi:
                     if not armed_short_switch[symbol]:
                         armed_short_switch[symbol] = True
@@ -117,100 +108,88 @@ def update():
                         if last_peak_level[symbol] is None or RSI > last_peak_level[symbol]:
                             last_peak_level[symbol] = RSI
 
-                #   진입 로직
                 if position[symbol] is None and cooldown_bars[symbol] == 0:
 
-                    # 숏 진입: peak → DOORSTEP 복구
                     if armed_short_switch[symbol] and last_peak_level[symbol] is not None:
                         short_trigger = last_peak_level[symbol] - DOORSTEP
                         if RSI <= short_trigger:
-                            px, q = bybit.entry_position(symbol=symbol, side="Sell", leverage=LEVERAGE)
+                            px, q = bybit.entry_position(symbol, "Sell", LEVERAGE)
                             if q > 0 and px is not None:
-                                position[symbol]    = "short"
-                                entry_px[symbol]    = px
-                                qty[symbol]         = q
+                                position[symbol] = "short"
+                                entry_px[symbol] = px
+                                qty[symbol] = q
                                 init_margin[symbol] = (px * q) / float(LEVERAGE)
+                                armed_short_switch[symbol] = False
+                                last_peak_level[symbol] = None
                                 cooldown_bars[symbol] = COOLDOWN_BARS
 
-                                armed_short_switch[symbol] = False
-                                last_peak_level[symbol]    = None
-
-                    # 롱 진입: trough → DOORSTEP 복구
                     if position[symbol] is None and cooldown_bars[symbol] == 0:
                         if armed_long_switch[symbol] and last_trough_level[symbol] is not None:
                             long_trigger = last_trough_level[symbol] + DOORSTEP
                             if RSI >= long_trigger:
-                                px, q = bybit.entry_position(symbol=symbol, side="Buy", leverage=LEVERAGE)
+                                px, q = bybit.entry_position(symbol, "Buy", LEVERAGE)
                                 if q > 0 and px is not None:
-                                    position[symbol]    = "long"
-                                    entry_px[symbol]    = px
-                                    qty[symbol]         = q
+                                    position[symbol] = "long"
+                                    entry_px[symbol] = px
+                                    qty[symbol] = q
                                     init_margin[symbol] = (px * q) / float(LEVERAGE)
-                                    cooldown_bars[symbol] = COOLDOWN_BARS
-
                                     armed_long_switch[symbol] = False
                                     last_trough_level[symbol] = None
+                                    cooldown_bars[symbol] = COOLDOWN_BARS
 
-                #   청산 
                 if position[symbol] == "short":
                     unreal = (entry_px[symbol] - cur_3) * qty[symbol]
                     roe    = (unreal / init_margin[symbol]) * 100
-
                     closed = False
 
                     if tp_mode == 1:
                         if roe <= -sl_roe:
-                            bybit.close_position(symbol, side="Buy")
+                            bybit.close_position(symbol, "Buy")
                             closed = True
-
                         elif roe >= tp_roe:
                             if RSI <= long_rsi:
                                 if (long_rsi - DOORSTEP) <= RSI <= (long_rsi + DOORSTEP):
-                                    bybit.close_position(symbol, side="Buy")
+                                    bybit.close_position(symbol, "Buy")
                                     closed = True
                             else:
-                                bybit.close_position(symbol, side="Buy")
+                                bybit.close_position(symbol, "Buy")
                                 closed = True
-
                     else:
                         if roe >= tp_roe or roe <= -sl_roe:
-                            bybit.close_position(symbol, side="Buy")
+                            bybit.close_position(symbol, "Buy")
                             closed = True
 
                     if closed:
                         position[symbol] = None
                         cooldown_bars[symbol] = COOLDOWN_BARS
-                        reset_switch_after_close(symbol, RSI)
+                        reset_switch_after_close(symbol, closed_side="short")
 
                 elif position[symbol] == "long":
                     unreal = (cur_3 - entry_px[symbol]) * qty[symbol]
                     roe    = (unreal / init_margin[symbol]) * 100
-
                     closed = False
 
                     if tp_mode == 1:
                         if roe <= -sl_roe:
-                            bybit.close_position(symbol, side="Sell")
+                            bybit.close_position(symbol, "Sell")
                             closed = True
-
                         elif roe >= tp_roe:
                             if RSI >= short_rsi:
                                 if (short_rsi - DOORSTEP) <= RSI <= (short_rsi + DOORSTEP):
-                                    bybit.close_position(symbol, side="Sell")
+                                    bybit.close_position(symbol, "Sell")
                                     closed = True
                             else:
-                                bybit.close_position(symbol, side="Sell")
+                                bybit.close_position(symbol, "Sell")
                                 closed = True
-
                     else:
                         if roe >= tp_roe or roe <= -sl_roe:
-                            bybit.close_position(symbol, side="Sell")
+                            bybit.close_position(symbol, "Sell")
                             closed = True
 
                     if closed:
                         position[symbol] = None
                         cooldown_bars[symbol] = COOLDOWN_BARS
-                        reset_switch_after_close(symbol, RSI)
+                        reset_switch_after_close(symbol, closed_side="long")
 
                 print(
                     f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -223,7 +202,7 @@ def update():
                 continue
 
             time.sleep(5)
-        time.sleep(10)
+        time.sleep(7)
 
 
 start()
