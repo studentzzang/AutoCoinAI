@@ -8,9 +8,9 @@ import numpy as np
 from pybit.unified_trading import HTTP
 
 # ====== 사용자 설정 변수 ======
-SYMBOL = ["XRPUSDT","ADAUSDT"]
+SYMBOL = ["PUMPFUNUSDT","FARTCOINUSDT"]
 LEVERAGE = 5
-TIMEFRAME = [5,15,30]
+TIMEFRAME = [1,5,15,30]
 RSI_PERIOD = [7, 9, 10, 14]
 EQUITY = 100.0
 START = "2025-02-01"
